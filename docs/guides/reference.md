@@ -199,6 +199,29 @@ export DEEPSEEK_API_KEY=sk-...       # DeepSeek
 export MINIMAX_API_KEY=...           # MiniMax
 ```
 
+#### `.env` file (loaded automatically)
+
+CheetahClaws loads a `.env` file from the project directory at startup, before any other module reads `os.environ`. Existing shell variables take priority over `.env` values, so you can override locally with `export VAR=...`.
+
+```ini
+# .env in your project root
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+ANTHROPIC_ENDPOINT=https://api.anthropic.com   # see below
+```
+
+Both `KEY=value` and `KEY="quoted value"` are supported. Lines starting with `#` are comments.
+
+#### `ANTHROPIC_ENDPOINT` (corporate proxy override)
+
+Set `ANTHROPIC_ENDPOINT` to point Claude API traffic at a corporate proxy or compatible relay instead of `https://api.anthropic.com`:
+
+```bash
+export ANTHROPIC_ENDPOINT=https://anthropic-proxy.corp.example.com
+```
+
+The env var always wins over any persisted value in `~/.cheetahclaws/config.json`, so `.env` changes take effect on the next launch without editing the JSON file. The endpoint is used by both the streaming client (`providers.py`) and the connectivity probes in `/doctor` and the setup wizard.
+
 ### Method 2: Set Inside the REPL (persisted)
 
 ```

@@ -144,6 +144,7 @@ class HttpTransport:
         self._config = config
         self._session_url: Optional[str] = None
         self._lock = threading.Lock()
+        self._oauth_lock = threading.Lock()  # serialises httpx client rebuilds
         self._next_id = 1
         self._client = None   # httpx.Client, loaded lazily
         self._sse_thread: Optional[threading.Thread] = None
@@ -169,26 +170,31 @@ class HttpTransport:
         return self._client
 
     def _ensure_oauth(self) -> None:
-        """Initialise OAuthSession on first 401 and inject the token into the client."""
-        if self._oauth is None:
-            from cc_mcp.oauth import OAuthSession
-            # Pass any non-auth headers already configured (e.g. custom SAP headers)
-            extra = {k: v for k, v in self._config.headers.items()
-                     if not k.lower().startswith("authorization")}
-            self._oauth = OAuthSession(self._config.name, self._config.url, extra)
-        token = self._oauth.get_token()
-        # Rebuild the httpx client with the fresh token injected.
-        if self._client:
-            self._client.close()
-            self._client = None
-        import httpx
-        headers = {"Accept": "application/json, text/event-stream",
-                   **self._config.headers, "Authorization": f"Bearer {token}"}
-        self._client = httpx.Client(
-            headers=headers,
-            timeout=self._config.timeout,
-            follow_redirects=True,
-        )
+        """Initialise OAuthSession on first 401 and inject the token into the client.
+
+        Guarded by _oauth_lock so concurrent 401-retries don't race on the
+        httpx.Client (close + recreate is otherwise not safe).
+        """
+        with self._oauth_lock:
+            if self._oauth is None:
+                from cc_mcp.oauth import OAuthSession
+                # Pass any non-auth headers already configured (e.g. custom SAP headers)
+                extra = {k: v for k, v in self._config.headers.items()
+                         if not k.lower().startswith("authorization")}
+                self._oauth = OAuthSession(self._config.name, self._config.url, extra)
+            token = self._oauth.get_token()
+            # Rebuild the httpx client with the fresh token injected.
+            if self._client:
+                self._client.close()
+                self._client = None
+            import httpx
+            headers = {"Accept": "application/json, text/event-stream",
+                       **self._config.headers, "Authorization": f"Bearer {token}"}
+            self._client = httpx.Client(
+                headers=headers,
+                timeout=self._config.timeout,
+                follow_redirects=True,
+            )
 
     def start(self) -> None:
         """For SSE transport: connect to the /sse endpoint and get session URL."""

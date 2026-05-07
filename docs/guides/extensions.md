@@ -280,12 +280,43 @@ Place a `.mcp.json` file in your project directory **or** edit `~/.cheetahclaws/
       "type": "sse",
       "url": "http://localhost:8080/sse",
       "headers": {"Authorization": "Bearer my-token"}
+    },
+    "github-tools": {
+      "type": "http",
+      "url": "https://example.com/mcp"
+    },
+    "sap-jira": {
+      "type": "http",
+      "url": "https://jira.example.com/mcp"
     }
   }
 }
 ```
 
 Config priority: `.mcp.json` (project) overrides `~/.cheetahclaws/mcp.json` (user) by server name.
+
+#### Environment variable expansion in headers
+
+Header values support `$VAR` and `${VAR}` syntax — useful for keeping secrets out of `mcp.json`:
+
+```json
+"headers": {"Authorization": "Bearer $GITHUB_TOKEN"}
+```
+
+The variables are expanded once at config load time, after the `.env` loader runs (see [Reference: Environment Variables](reference.md#environment-variables)).
+
+#### OAuth 2.0 (HTTP transport)
+
+For HTTP MCP servers that require OAuth (e.g. enterprise SAP/Jira), CheetahClaws speaks the full MCP Authorization spec:
+
+- Resource server metadata discovery (RFC 9728)
+- Authorization server metadata discovery (RFC 8414)
+- Dynamic client registration (RFC 7591) — used when no `client_id` is configured
+- Authorization Code + PKCE (S256) flow with browser redirect
+- Automatic refresh-token rotation
+- Token persistence to `~/.cheetahclaws/mcp_oauth.json` (mode `0600`)
+
+You don't have to do anything beyond declaring the server URL: on the first `401` the client opens your browser, you sign in, and the resulting access token is cached and refreshed transparently. To force a re-auth, delete the relevant entry in `~/.cheetahclaws/mcp_oauth.json`.
 
 ### Quick start
 
@@ -304,11 +335,14 @@ uvx mcp-server-git --help   # verify it works
 ### REPL commands
 
 ```
-/mcp                          # list servers + their tools + connection status
-/mcp reload                   # reconnect all servers, refresh tool list
-/mcp reload git               # reconnect a single server
-/mcp add myserver uvx mcp-server-x   # add stdio server
-/mcp remove myserver          # remove from user config
+/mcp                                       # list servers + their tools + connection status
+/mcp list                                  # alias for the above
+/mcp reload                                # reconnect all servers, refresh tool list
+/mcp reload git                            # reconnect a single server
+/mcp add myserver uvx mcp-server-x         # add stdio server
+/mcp add myserver --transport http <url>   # add HTTP/SSE server (OAuth runs on first 401)
+/mcp add myserver --transport sse <url>
+/mcp remove myserver                       # remove from user config
 ```
 
 ### How Claude uses MCP tools

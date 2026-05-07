@@ -43,7 +43,20 @@ def _load_store() -> dict:
 
 def _save_store(data: dict) -> None:
     _TOKEN_STORE.parent.mkdir(parents=True, exist_ok=True)
-    _TOKEN_STORE.write_text(json.dumps(data, indent=2))
+    # Restrict the parent dir too — best-effort, ignored on filesystems that
+    # don't honour POSIX modes (e.g. some Windows setups).
+    try:
+        os.chmod(_TOKEN_STORE.parent, 0o700)
+    except OSError:
+        pass
+    # Write atomically with 0600 perms so refresh tokens aren't world-readable.
+    tmp = _TOKEN_STORE.with_suffix(_TOKEN_STORE.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, _TOKEN_STORE)
 
 
 # ── PKCE helpers ──────────────────────────────────────────────────────────────
@@ -285,11 +298,14 @@ class OAuthSession:
         token_endpoint = meta["token_endpoint"]
         reg_endpoint   = meta.get("registration_endpoint")
 
+        # Pick the loopback port ONCE — registration and callback must use the
+        # same redirect_uri or strict OAuth servers (per the MCP spec) reject it.
+        port = self._pick_port()
+        redirect_uri = f"http://localhost:{port}/callback"
+
         # Ensure we have a client_id (register if not)
         client_id = entry.get("client_id")
         if not client_id and reg_endpoint:
-            port = self._pick_port()
-            redirect_uri = f"http://localhost:{port}/callback"
             client_id = _register_client(reg_endpoint, self._name, redirect_uri)
             entry["client_id"] = client_id
         elif not client_id:
@@ -299,20 +315,23 @@ class OAuthSession:
                 "Add 'oauth_client_id' to its mcp.json entry."
             )
 
-        port = self._pick_port()
-        redirect_uri = f"http://localhost:{port}/callback"
         verifier, challenge = _pkce_pair()
         state = secrets.token_urlsafe(32)
 
-        params = urllib.parse.urlencode({
+        # Pick a scope the server actually advertises; omit otherwise.
+        auth_params = {
             "response_type": "code",
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": state,
-            "scope": "mcp",
-        })
+        }
+        scope = self._pick_scope(meta)
+        if scope:
+            auth_params["scope"] = scope
+
+        params = urllib.parse.urlencode(auth_params)
         auth_url = f"{auth_endpoint}?{params}"
 
         cb = _CallbackServer(port, state)
@@ -336,3 +355,18 @@ class OAuthSession:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
+
+    @staticmethod
+    def _pick_scope(meta: dict) -> Optional[str]:
+        """Choose a scope the AS advertises. Prefer 'mcp', else the first one,
+        else None (which means: don't send a scope parameter at all).
+
+        Hardcoding 'mcp' broke servers whose scopes_supported didn't include it
+        (invalid_scope error from the AS).
+        """
+        supported = meta.get("scopes_supported") or []
+        if "mcp" in supported:
+            return "mcp"
+        if supported:
+            return supported[0]
+        return None
