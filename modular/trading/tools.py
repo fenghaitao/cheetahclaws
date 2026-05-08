@@ -127,6 +127,76 @@ def _get_news(params: dict, config: dict) -> str:
     return output
 
 
+class _StrategySignalEngine:
+    """SignalEngine-compatible wrapper around the inline strategy definitions.
+
+    Used by walk_forward in BaseEngine, which expects a `.generate(data_map)`
+    method matching the SignalEngine protocol.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def generate(self, data_map: dict) -> dict:
+        out = {}
+        for sym, data in data_map.items():
+            out[sym] = _strategy_signals(self.name, [d["close"] for d in data])
+        return out
+
+
+def _strategy_signals(strategy: str, closes: list[float]) -> list[float]:
+    """Return per-bar signals for the named strategy. Pure function of closes."""
+    from .data import indicators as ind
+    n = len(closes)
+    signals = [0.0] * n
+
+    if strategy == "dual_ma":
+        sma_fast = ind.sma(closes, 20)
+        sma_slow = ind.sma(closes, 50)
+        for i in range(n):
+            if sma_fast[i] is not None and sma_slow[i] is not None:
+                signals[i] = 1.0 if sma_fast[i] > sma_slow[i] else -1.0
+
+    elif strategy == "rsi_mean_reversion":
+        rsi_vals = ind.rsi(closes, 14)
+        for i in range(n):
+            if rsi_vals[i] is not None:
+                if rsi_vals[i] < 30:
+                    signals[i] = 1.0
+                elif rsi_vals[i] > 70:
+                    signals[i] = -1.0
+
+    elif strategy == "bollinger_breakout":
+        bb = ind.bollinger_bands(closes, 20, 2.0)
+        for i in range(n):
+            if bb["upper"][i] is not None:
+                if closes[i] > bb["upper"][i]:
+                    signals[i] = 1.0
+                elif closes[i] < bb["lower"][i]:
+                    signals[i] = -1.0
+
+    elif strategy == "macd_crossover":
+        macd_data = ind.macd(closes)
+        for i in range(n):
+            hist = macd_data["histogram"][i]
+            if hist is not None:
+                signals[i] = 1.0 if hist > 0 else -1.0
+
+    else:
+        raise ValueError(
+            f"Unknown strategy: {strategy}. "
+            f"Available: dual_ma, rsi_mean_reversion, bollinger_breakout, macd_crossover"
+        )
+    return signals
+
+
+def _build_strategy(name: str) -> _StrategySignalEngine:
+    """Public factory used by walk-forward backtests."""
+    # Validate by attempting a tiny generate.
+    _strategy_signals(name, [1.0] * 60)
+    return _StrategySignalEngine(name)
+
+
 def _run_backtest(params: dict, config: dict) -> str:
     """Run a backtest with a given strategy."""
     symbol = params["symbol"]

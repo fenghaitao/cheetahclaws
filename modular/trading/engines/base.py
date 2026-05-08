@@ -340,6 +340,130 @@ class BaseEngine(ABC):
             "commission": t.commission, "bars_held": t.bars_held,
         }
 
+    # ── Walk-forward backtest ──────────────────────────────────────────────
+
+    def walk_forward(
+        self,
+        signal_engine: "SignalEngine",
+        data_map: dict[str, list[dict]],
+        n_splits: int = 5,
+        min_split_bars: int = 60,
+    ) -> dict:
+        """Run rolling out-of-sample backtests across n_splits chunks.
+
+        Why: ``run_backtest`` runs on the entire history at once — so a
+        strategy that worked great in 2017-2019 but blew up in 2022 still
+        looks fine on aggregate. Walk-forward chunks the history and
+        reports per-chunk performance, surfacing regime-dependent rot
+        that aggregate metrics hide.
+
+        For parameter-free strategies (the four that ship with /trading
+        backtest) every chunk is a true out-of-sample window. For
+        parameterised strategies the caller is responsible for fitting
+        only on data preceding each test window.
+
+        Returns:
+            {
+                "splits": [{"start_date", "end_date", "metrics", "trades"}…],
+                "stability": {  # cross-chunk stats
+                    "sharpe_min", "sharpe_mean", "sharpe_stdev",
+                    "return_consistency",  # fraction of chunks with positive return
+                    "verdict": str,
+                },
+                "aggregate_metrics": dict,  # for comparison with run_backtest
+            }
+        """
+        symbols = list(data_map.keys())
+        if not symbols:
+            return {"splits": [], "stability": {}, "aggregate_metrics": _empty_metrics(self.config.initial_capital)}
+
+        max_bars = min(len(data_map[s]) for s in symbols)
+        if max_bars < n_splits * min_split_bars:
+            n_splits = max(1, max_bars // min_split_bars)
+        if n_splits < 2:
+            return {
+                "splits": [],
+                "stability": {"verdict": f"Not enough history for walk-forward ({max_bars} bars, need {2 * min_split_bars}+)."},
+                "aggregate_metrics": _empty_metrics(self.config.initial_capital),
+            }
+
+        chunk = max_bars // n_splits
+        split_results = []
+
+        # Generate signals once on full history (signal engines are pure
+        # functions of the data window seen so far for the strategies that
+        # ship with /trading backtest — they only look back, never ahead).
+        signal_map_full = signal_engine.generate(data_map)
+
+        per_chunk_returns: list[float] = []
+        per_chunk_sharpes: list[float] = []
+
+        for i in range(n_splits):
+            start = i * chunk
+            end = (i + 1) * chunk if i < n_splits - 1 else max_bars
+            sliced_data = {s: data_map[s][start:end] for s in symbols}
+            sliced_signals = {
+                s: signal_map_full.get(s, [])[start:end] for s in symbols
+            }
+
+            # Reset engine state for each chunk so the chunks are
+            # genuinely independent. Subclasses must be re-instantiable
+            # cheaply; if state matters use a deepcopy here instead.
+            self.trades = []
+            self.positions = {}
+            self.equity_curve = []
+            self.cash = self.config.initial_capital
+
+            chunk_result = self.run_backtest(sliced_data, sliced_signals)
+
+            metrics = chunk_result["metrics"]
+            split_results.append({
+                "split": i + 1,
+                "start_idx": start,
+                "end_idx": end,
+                "start_date": sliced_data[symbols[0]][0]["date"] if sliced_data[symbols[0]] else "",
+                "end_date":   sliced_data[symbols[0]][-1]["date"] if sliced_data[symbols[0]] else "",
+                "metrics": metrics,
+                "trade_count": len(chunk_result["trades"]),
+            })
+            per_chunk_returns.append(metrics["total_return"])
+            per_chunk_sharpes.append(metrics["sharpe_ratio"])
+
+        # Stability stats
+        positive_chunks = sum(1 for r in per_chunk_returns if r > 0)
+        consistency = positive_chunks / len(per_chunk_returns)
+        sharpe_mean = sum(per_chunk_sharpes) / len(per_chunk_sharpes)
+        sharpe_min = min(per_chunk_sharpes)
+        if len(per_chunk_sharpes) >= 2:
+            mean = sharpe_mean
+            sharpe_stdev = math.sqrt(
+                sum((s - mean) ** 2 for s in per_chunk_sharpes) / len(per_chunk_sharpes)
+            )
+        else:
+            sharpe_stdev = 0.0
+
+        if consistency >= 0.7 and sharpe_min > 0:
+            verdict = "STABLE — strategy works across most regimes."
+        elif consistency >= 0.5 and sharpe_mean > 0.5:
+            verdict = "MIXED — works on average but blows up in some regimes; consider regime filter."
+        elif consistency < 0.3:
+            verdict = "FRAGILE — fails in most chunks; aggregate Sharpe is misleading."
+        else:
+            verdict = "INCONCLUSIVE — too noisy to call."
+
+        return {
+            "splits": split_results,
+            "stability": {
+                "n_splits": len(split_results),
+                "return_consistency": round(consistency * 100, 1),
+                "sharpe_mean": round(sharpe_mean, 3),
+                "sharpe_min": round(sharpe_min, 3),
+                "sharpe_stdev": round(sharpe_stdev, 3),
+                "positive_chunks": positive_chunks,
+                "verdict": verdict,
+            },
+        }
+
 
 # ── Performance Metrics ───────────────────────────────────────────────────
 

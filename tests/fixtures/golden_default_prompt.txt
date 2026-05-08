@@ -144,7 +144,7 @@ These commands the **user** can invoke at the REPL prompt — they are NOT tools
 - `/theme` — List or set the console color theme
 - `/thinking` — Toggle extended thinking
 - `/trade` — Alias for /trading
-- `/trading` `[analyze | backtest | price | indicators | status | history | memory]` — AI trading agent — multi-agent analysis and backtesting
+- `/trading` `[analyze | review | verify | price | indicators | discover | rank | factors | anomaly | monitor | paper | calibration | watch | scan | manage | optimize | ml | backtest | walkforward | status | history | memory]` — AI trading agent — analyze, discover (auto-find candidates from insider clusters / earnings beats / sector rotation / factors), rank, anomaly detection, market monitor with bridge alerts, paper-trade tracker, calibration, position review, managed portfolios ($X→1-week PnL), MV optimization, ML stacker, alt-data (insider / sentiment / trends), walk-forward backtest
 - `/tts` `[status]` — AI voice generator: text → any style → audio file
 - `/verbose` — Toggle verbose output
 - `/video` `[status | niches]` — AI video factory: story→voice→images→mp4
