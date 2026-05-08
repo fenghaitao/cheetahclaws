@@ -421,28 +421,48 @@ def _backlog_add(mgr, rest: str, config: dict) -> bool:
         err("Usage: /lab backlog add <topic> [--iterate] [--target=N] "
             "[--max=N] [--prio=N]")
         return True
-    # Strip flags from the topic.
+    # Strip flags from the topic. Flags are only honoured *after* the
+    # topic (or quoted) — once we see the first --flag, everything from
+    # there is treated as flags, and any non-flag token after that is a
+    # typo (not silently appended to the topic).
     iterate_flag = False
     target_score = None
     max_iter = 5
     priority = 0
     tokens = rest.split()
-    topic_words = []
+    topic_words: list[str] = []
+    in_flags = False
+    unknown: list[str] = []
     for tok in tokens:
-        if tok == "--iterate":
-            iterate_flag = True
-        elif tok.startswith("--target="):
-            try: target_score = float(tok.split("=", 1)[1])
-            except ValueError: pass
-        elif tok.startswith("--max="):
-            try: max_iter = max(1, int(tok.split("=", 1)[1]))
-            except ValueError: pass
-        elif tok.startswith("--prio="):
-            try: priority = int(tok.split("=", 1)[1])
-            except ValueError: pass
+        if tok.startswith("--"):
+            in_flags = True
+            if tok == "--iterate":
+                iterate_flag = True
+            elif tok.startswith("--target="):
+                try: target_score = float(tok.split("=", 1)[1])
+                except ValueError: unknown.append(tok)
+            elif tok.startswith("--max="):
+                try: max_iter = max(1, int(tok.split("=", 1)[1]))
+                except ValueError: unknown.append(tok)
+            elif tok.startswith("--prio="):
+                try: priority = int(tok.split("=", 1)[1])
+                except ValueError: unknown.append(tok)
+            else:
+                unknown.append(tok)
+        elif in_flags:
+            # A bare word after the flag block is almost always a typo
+            # (e.g. user accidentally typed `... --max=5 start`). Reject
+            # explicitly rather than silently merging into the topic.
+            unknown.append(tok)
         else:
             topic_words.append(tok)
-    topic = " ".join(topic_words).strip()
+    if unknown:
+        err(f"Unknown tokens after flags: {' '.join(unknown)}")
+        info("Flags allowed: --iterate, --target=N, --max=N, --prio=N")
+        info("Place the topic FIRST (quoted if it contains spaces), "
+             "then flags last.")
+        return True
+    topic = " ".join(topic_words).strip().strip('"').strip("'")
     if not topic:
         err("Empty topic after stripping flags.")
         return True
