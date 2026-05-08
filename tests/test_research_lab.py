@@ -36,6 +36,48 @@ from research.lab import output as _output
 # ── Storage ────────────────────────────────────────────────────────────────
 
 
+# ── Self-repeat / dedupe helpers (cheap-model degenerate sampling) ──────
+
+
+def test_dedupe_self_repeat_exact_halves():
+    """Cheap models often emit their full response twice. Detect that
+    text[:n//2] == text[n//2:] (modulo whitespace) and trim."""
+    front = ("Chosen RQ: Does memory efficiency in RetNet reduce training "
+             "time vs MoE? Reason: targets a real bottleneck.")
+    text = front + front
+    assert _orch._dedupe_self_repeat(text) == front
+
+
+def test_dedupe_self_repeat_leaves_clean_text_alone():
+    text = "This is a perfectly fine response with no repetition at all."
+    assert _orch._dedupe_self_repeat(text) == text
+
+
+def test_dedupe_self_repeat_short_below_sanity_floor():
+    """Very short responses are never trimmed (false-positive risk)."""
+    short = "short reply"
+    assert _orch._dedupe_self_repeat(short) == short
+
+
+def test_dedupe_self_repeat_sanity_floor_prevents_overtrim():
+    """A weirdly-shaped response that *could* trigger pattern-2 must
+    not be collapsed below 30% of original length."""
+    weird = "A" + ("B" * 200)
+    out = _orch._dedupe_self_repeat(weird)
+    assert len(out) >= 60
+
+
+def test_extract_numbered_dedupes_repeated_list():
+    """questioner emits 5 RQs then 5 duplicates → keep 5."""
+    text = (
+        "1. RQ-one A\n2. RQ-two B\n3. RQ-three C\n4. RQ-four D\n5. RQ-five E\n"
+        "1. RQ-one A\n2. RQ-two B\n3. RQ-three C\n4. RQ-four D\n5. RQ-five E"
+    )
+    got = _orch._extract_numbered(text)
+    assert len(got) == 5
+    assert got[0].startswith("RQ-one")
+
+
 def test_storage_create_run_returns_record(tmp_path):
     s = _storage.LabStorage(tmp_path / "lab.db")
     r = s.create_run(topic="hi", budget_tokens=10000, max_rounds=3)

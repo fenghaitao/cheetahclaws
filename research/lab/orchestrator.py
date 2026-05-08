@@ -827,15 +827,40 @@ def _producer_with_review_loop(
 
 
 def _invoke(run: LabRun, role: Role, *, user: str, kind: str) -> LLMResponse:
-    """Call the LLM for ``role``, log to the message bus, deduct budget."""
+    """Call the LLM for ``role``, log to the message bus, deduct budget.
+
+    Cheap / small / quantised models routinely emit their full response
+    twice in a single completion (degenerate sampling) — gpt-5-nano did
+    this on every PI message in our baseline, doubling artifact size and
+    confusing reviewers.  We sanitise the text in-band via
+    :func:`_dedupe_self_repeat` before logging or returning, so every
+    downstream consumer (storage, prompts, parsers) sees the clean text.
+    """
     template = _safe_load_template(role)
     system = template + "\n\n---\nCurrent topic: " + run.state.topic
     resp = run.call_llm(role_name=role.name, model=role.model,
                          system=system, user=user, config=run.config)
+    cleaned = _dedupe_self_repeat(resp.text)
+    if cleaned != resp.text:
+        # Replace text on the response object — preserve token / cost fields.
+        try:
+            resp = type(resp)(
+                text=cleaned,
+                tokens_in=resp.tokens_in,
+                tokens_out=resp.tokens_out,
+                cost_cents=resp.cost_cents,
+            )
+        except Exception:
+            # Some LLMResponse impls may be frozen / dataclass-only;
+            # fall back to mutating .text directly.
+            try:
+                resp.text = cleaned    # type: ignore[attr-defined]
+            except Exception:
+                pass
     run.storage.append_message(
         run.state.run_id, stage=run.state.stage.value,
         round_=run.state.round, role=role.name, kind=kind,
-        content=resp.text,
+        content=cleaned,
         meta={"model": role.model,
               "tokens_in": resp.tokens_in,
               "tokens_out": resp.tokens_out,
@@ -877,12 +902,81 @@ _CITE_BLOCK_RE = re.compile(
 
 
 def _extract_numbered(text: str) -> list[str]:
-    out = []
+    """Pull numbered list items, preserving order, deduping by content.
+
+    Cheap models sometimes restart the list (1. 2. 3. … 1. 2. 3.) so a
+    naïve splitlines+match doubles the items. Drop a line if its first
+    80 chars (lower-cased, whitespace-collapsed) match an earlier line.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
     for line in text.splitlines():
         m = _NUM_RE.match(line)
-        if m:
-            out.append(m.group(1).strip())
+        if not m:
+            continue
+        content = m.group(1).strip()
+        key = " ".join(content.split()).lower()[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(content)
     return out
+
+
+def _dedupe_self_repeat(text: str) -> str:
+    """Trim trailing self-repetition emitted by cheap / quantised models.
+
+    Two patterns we've seen in production:
+
+      1. Exact duplication:    "X" → "XX" (the model finished, then started
+         again from scratch).  Detection: text[:n//2] == text[n//2:] after
+         whitespace-trim, length above a sanity floor.
+
+      2. Approximate suffix duplicate:  "X" → "X X′" where X′ has the same
+         opening lines as X but with minor punctuation drift.  Detection:
+         the first 200 chars of the response appear *again* later in the
+         same response with at least 80% of their content intact.
+
+    Returns the cleaned text. Never raises — on any unexpected shape we
+    just return ``text`` unchanged so we never destroy a legitimate but
+    weird response.
+    """
+    if not text:
+        return text
+    s = text.strip()
+    n = len(s)
+    if n < 80:
+        return text
+
+    # Pattern 1: exact halves match.
+    half = n // 2
+    for split in (half, half + 1):
+        front = s[:split].rstrip()
+        back  = s[n - len(front):].lstrip()
+        if front and front == back:
+            return front
+
+    # Pattern 2: prefix recurs in the back half.
+    prefix_len = min(200, n // 4)
+    prefix_norm = " ".join(s[:prefix_len].split()).lower()
+    if len(prefix_norm) < 60:
+        return text
+    back_half = s[half:]
+    back_norm = " ".join(back_half.split()).lower()
+    pos = back_norm.find(prefix_norm[:80])
+    if pos >= 0:
+        # Trim from the start of the duplicate back-occurrence in the
+        # original (non-normalised) string. We approximate by walking
+        # the back half until we've consumed the same number of
+        # printable chars as the normalised match position.
+        # Simple heuristic: cut at half + that approx position.
+        approx_cut = half + max(0, pos - 5)
+        candidate = s[:approx_cut].rstrip()
+        # Sanity floor: don't trim away >70% of the response.
+        if len(candidate) >= 0.3 * n:
+            return candidate
+
+    return text
 
 
 def _extract_citations_block(text: str) -> str:
