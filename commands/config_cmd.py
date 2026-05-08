@@ -115,9 +115,17 @@ def cmd_config(args: str, _state, config) -> bool:
             val = val.lower() == "true"
         elif val.isdigit():
             val = int(val)
+        # JSON-style values: lists, objects, numbers with signs, quoted strings.
+        # Without this branch, /config wechat_smart_reply_whitelist=["a","b"]
+        # silently stored the literal string '["a","b"]'.
+        elif val and val[0] in '[{"-' or (val.startswith("-") and val[1:].isdigit()):
+            try:
+                val = json.loads(val)
+            except json.JSONDecodeError:
+                pass  # leave as string
         config[key] = val
         save_config(config)
-        ok(f"Set {key} = {val}")
+        ok(f"Set {key} = {val!r}")
     else:
         k = args.strip()
         v = config.get(k, "(not set)")

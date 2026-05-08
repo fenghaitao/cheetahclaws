@@ -50,7 +50,7 @@ Type `/` and press **Tab** to see all commands with descriptions. Continue typin
 | `/model` | Show current model + list all available models |
 | `/model <name>` | Switch model (takes effect immediately) |
 | `/config` | Show all current config values |
-| `/config key=value` | Set a config value (persisted to disk) |
+| `/config key=value` | Set a config value (persisted to disk). v3.05.78+ parses JSON values: `["a","b"]`, `{"k":"v"}`, signed numbers, quoted strings — list/dict configs no longer get silently saved as literal strings. |
 | `/save` | Save session (auto-named by timestamp) |
 | `/save <filename>` | Save session to named file |
 | `/load` | Interactive list grouped by date; enter number, `1,2,3` to merge, or `H` for full history |

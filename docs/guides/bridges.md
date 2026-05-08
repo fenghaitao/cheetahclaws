@@ -277,6 +277,122 @@ If `wechat_token` is set in `~/.cheetahclaws/config.json`, the bridge starts aut
 
 Also auto-starts in `cheetahclaws --web` (Docker / headless deployments).
 
+### Smart-reply panel (v3.05.78+)
+
+When a whitelisted contact sends an inbound message, the auxiliary
+cheap model drafts 3 candidate replies and pushes a panel to your
+**文件传输助手** (filehelper) chat — you reply on your phone and the
+bot sends the chosen text back to the original contact.
+
+```jsonc
+// ~/.cheetahclaws/config.json
+{
+  "wechat_smart_reply":            true,
+  "wechat_smart_reply_whitelist":  ["wxid_alice...", "wxid_bob..."],
+  "wechat_smart_reply_groups":     false,    // also draft for group msgs
+  "wechat_smart_reply_groups_at_only": false, // groups: only when @<self>
+  "wechat_smart_reply_timeout_s":  300       // panel TTL
+}
+```
+
+Panel layout in filehelper:
+
+```
+💬 [AA] Alice (大学同学) → 「周末有空吗」
+
+[1] 有的，周六下午行
+[2] 周末出差，下周可以吗
+[3] 在忙，晚点回你
+
+回 1/2/3 发送 · 直接打字自定义 · x 跳过 · q 看队列
+```
+
+| Reply | Effect |
+|---|---|
+| `1` / `2` / `3` | Send the matching candidate to the original contact |
+| Freeform text | Send your own text instead |
+| `x` | Skip this panel (no reply sent) |
+| `q` / `queue` | List currently pending panels |
+| `AA 1` / `AA x` / `AA <text>` | Address a specific panel by ID (when multiple are queued) |
+
+Confirmed sends are appended to `wx_reply_history` and feed style
+mimicking on subsequent panels — over time the candidates get closer
+to your real voice.
+
+**Storage:**
+- `~/.cheetahclaws/wx_smart_reply.db` — pending panels + reply history
+  (auto-fallback to in-memory if SQLite init fails)
+- `~/.cheetahclaws/wx_contacts.json` — relationship/notes per uid,
+  hot-reloaded on mtime change. Schema:
+
+  ```json
+  {
+    "wxid_alice123": {
+      "label":        "Alice (大学同学)",
+      "relationship": "close friend",
+      "notes":        "她最近在找工作。语气随便，喜欢用 emoji。"
+    }
+  }
+  ```
+
+**Important: bot-owner self-uid bypass.** Your own messages to the bot
+must always reach the agent — never get routed to smart-reply (you
+can't draft a reply to yourself). The bridge auto-records your uid
+the first time you send any non-filehelper, non-group message:
+
+```jsonc
+"wechat_self_uid": "o9cq80_Q_dEyQeBt-LlErxfZK2G8@im.wechat"  // auto-set
+```
+
+`is_smart_reply_target()` returns `False` for this uid unconditionally,
+even if it's also in `wechat_smart_reply_whitelist`.
+
+### `/draft <message>` — semi-automatic reply suggestion
+
+For the iLink ClawBot architecture (the default), the bot is a
+*separate* WeChat account, so it cannot intercept inbound messages on
+your main account. `/draft` is the manual workaround:
+
+```
+/draft 周末有空吗?                         # generic tone
+/draft @wxid_alice 周末有空吗?            # tone-conditioned via wx_contacts.json
+/draft @Alice 周末有空吗?                  # also accepts the label as the lookup key
+```
+
+Output:
+
+```
+  Drafting 3 replies for Alice (大学同学) → 「周末有空吗?」
+
+  [1] 有空呀，想干嘛
+  [2] 这周末出差，下周可以吗
+  [3] 在忙，晚点回你
+
+  Copy one and paste it into WeChat (or wherever) — this is fully manual.
+```
+
+**When invoked from a bridge channel** (the user typed `/draft` from
+their phone), candidates are also echoed back to the originating
+WeChat / Telegram / Slack uid + stashed in `bridges.draft_cache`
+(per-uid, 10-min TTL, one-shot). A digit-only follow-up (`1`/`2`/`3`)
+within 10 minutes consumes the cache and returns just the chosen
+text — no agent invocation, no smart-reply panel triggered:
+
+```
+You (on phone) → ClawBot:  /draft 周末有空吗?
+ClawBot       → You:       💬 Drafts for 「周末有空吗?」
+                           [1] 有空呀，想干嘛
+                           [2] 这周末出差，下周可以吗
+                           [3] 在忙，晚点回你
+                           回 1/2/3 取那条 · 复制粘贴给对方
+You          → ClawBot:    2
+ClawBot       → You:       这周末出差，下周可以吗
+                           ↑ you copy this and paste to Alice manually
+```
+
+Also works inside the cheetahclaws terminal — the candidates print to
+stdout, you copy/paste into your IM client of choice.
+
 ---
 
 ## Slack Bridge

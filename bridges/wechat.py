@@ -268,12 +268,22 @@ def _wx_qr_login(config: dict, bot_type: str = _ILINK_DEFAULT_BOT_TYPE,
 def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
     """Returns "stopped", "auth_error", or raises on unexpected fatal error."""
     from tools import _wx_thread_local
+    from bridges import wechat_smart_reply as _sr
     session_ctx = runtime.get_session_ctx(config.get("_session_id", "default"))
     run_query_cb = session_ctx.run_query
     sync_buf = ""
     consecutive_failures = 0
 
     session_ctx.wx_send = lambda uid, txt: _wx_send(uid, txt, config)
+
+    # Smart-reply panel store (SQLite-backed; falls back to in-memory) and
+    # contacts loader, lifecycles bound to the poll loop.
+    _smart_store = _sr.make_store(
+        timeout_s=float(config.get("wechat_smart_reply_timeout_s",
+                                    _sr.DEFAULT_TIMEOUT_S)),
+    )
+    _smart_store.start_janitor()
+    _smart_contacts = _sr.ContactsStore()
 
     while not _wechat_stop.is_set():
         try:
@@ -316,6 +326,22 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                 if ctx_tok and from_uid:
                     _wx_context_tokens[from_uid] = ctx_tok
 
+                # Auto-record the bot owner's own uid the first time we
+                # see them write to the bot.  Smart-reply uses this to
+                # short-circuit (your own messages must always reach the
+                # agent, regardless of what's in wechat_smart_reply_whitelist).
+                # Filehelper and groups never count as "self".
+                if (from_uid
+                        and not config.get("wechat_self_uid")
+                        and from_uid != "filehelper"
+                        and not from_uid.endswith("@chatroom")):
+                    config["wechat_self_uid"] = from_uid
+                    try:
+                        from cc_config import save_config
+                        save_config(config)
+                    except Exception:
+                        pass
+
                 msg_id = msg.get("message_id") or msg.get("seq") or msg.get("client_id") or ""
                 if msg_id and msg_id in _wx_seen_msgids:
                     continue
@@ -346,7 +372,34 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                     evt.set()
                     continue
 
-                print(clr(f"\n  📩 WeChat [{from_uid[:8]}]: {text}", "cyan"))
+                # ── Smart-reply: filehelper input routes panel choice ──────
+                # Only consume the message if there's an active panel and
+                # the user is responding to it; otherwise fall through so
+                # they can still use !jobs / etc. from filehelper.
+                if _sr.is_filehelper(from_uid):
+                    consumed = _sr.handle_filehelper_message(
+                        text, _smart_store,
+                        send_to_target=lambda uid, txt: _wx_send(uid, txt, config),
+                        send_to_filehelper=lambda txt: _wx_send(_sr._FILEHELPER_UID, txt, config),
+                    )
+                    if consumed:
+                        print(clr(f"\n  ✓ smart-reply panel resolved", "dim"))
+                        continue
+
+                print(clr(f"\n  📩 WeChat [{from_uid}]: {text}", "cyan"))
+
+                # ── /draft pick: digit-only reply consumes a pending draft ──
+                # If the user previously ran /draft and we have candidates
+                # cached for this uid, a bare "1"/"2"/"3" returns just the
+                # chosen line — no agent, no smart-reply panel. One-shot.
+                _stripped = text.strip()
+                if _stripped.isdigit() and 1 <= int(_stripped) <= 9:
+                    from bridges.draft_cache import take as _draft_take
+                    _picked = _draft_take(from_uid, int(_stripped))
+                    if _picked is not None:
+                        _wx_send(from_uid, _picked, config)
+                        print(clr(f"  ↳ /draft pick #{_stripped} sent", "dim"))
+                        continue
 
                 # ── Interactive PTY session ────────────────────────────────
                 from bridges.interactive_session import get_session, set_session, remove_session, InteractiveSession
@@ -559,6 +612,27 @@ def _wx_poll_loop(token: str, base_url: str, config: dict) -> str:
                     session_ctx.wx_input_value = text
                     _pending_evt.set()
                     continue
+
+                # ── Smart-reply: whitelisted contact → draft, don't auto-reply ─
+                if _sr.is_smart_reply_target(from_uid, config, text=text):
+                    label = (msg.get("from_user_nickname")
+                             or msg.get("from_username")
+                             or from_uid[:8])
+                    triggered = _sr.trigger_smart_reply(
+                        target_uid=from_uid,
+                        target_label=str(label),
+                        message=text,
+                        store=_smart_store,
+                        config=config,
+                        send_to_filehelper=lambda txt: _wx_send(_sr._FILEHELPER_UID, txt, config),
+                        contacts=_smart_contacts,
+                    )
+                    if triggered:
+                        print(clr(f"  ↳ smart-reply panel sent to filehelper", "dim"))
+                        continue
+                    # Generation failed → fall through to normal dispatch so
+                    # the user still gets *some* response.
+                    print(clr(f"  ⚠ smart-reply candidate generation failed; falling back to auto-reply", "yellow"))
 
                 # ── Claude query: create job, queue if busy, else run now ──
                 job = _jobs.create(text, source="wechat")

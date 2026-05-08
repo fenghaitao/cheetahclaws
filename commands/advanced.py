@@ -220,6 +220,135 @@ def _save_synthesis(state, out_file: str) -> None:
         return
 
 
+# ── Draft (semi-automatic reply suggestion) ────────────────────────────────
+
+def cmd_draft(args: str, _state, config) -> bool:
+    """Draft 3 candidate replies for a message someone sent you.
+
+    Usage:
+        /draft <对方刚发的消息>
+        /draft @<uid_or_label> <对方刚发的消息>
+
+    The auxiliary cheap model (config.auxiliary_model) drafts 3 candidates.
+    With @<uid_or_label>, contact relationship/notes from
+    ~/.cheetahclaws/wx_contacts.json are used to tune tone and language.
+    Past confirmed sends from the smart-reply history (if any) feed style
+    mimicking automatically.
+    """
+    raw = args.strip()
+    if not raw:
+        err("Usage: /draft <对方的消息>")
+        info("       /draft @<uid_or_label> <对方的消息>")
+        info("Example: /draft 周末有空吗")
+        info("         /draft @wxid_alice 周末有空吗")
+        return True
+
+    contact = None
+    sender_label = "对方"
+    if raw.startswith("@"):
+        head, _, rest = raw.partition(" ")
+        if rest.strip():
+            key = head[1:]
+            try:
+                from bridges.wechat_smart_reply import ContactsStore
+                store = ContactsStore()
+                c = store.get(key)
+                if c is None:
+                    # Fallback: match by label (case-insensitive) in the JSON
+                    for uid, entry in store._data.items():
+                        if (entry.get("label") or "").lower() == key.lower():
+                            c = store.get(uid)
+                            break
+                if c:
+                    contact = c
+                    sender_label = c.label or key
+                else:
+                    warn(f"No contact '{key}' in ~/.cheetahclaws/wx_contacts.json — using generic tone")
+                    sender_label = key
+            except Exception as _e:
+                warn(f"Contact lookup failed ({_e}); using generic tone")
+                sender_label = key
+            raw = rest.strip()
+
+    msg_preview = raw if len(raw) <= 80 else raw[:77] + "…"
+    info(f"  Drafting 3 replies for {clr(sender_label, 'bold')} → 「{msg_preview}」")
+
+    history = []
+    try:
+        from bridges.wechat_smart_reply_store import make_store
+        store = make_store(timeout_s=300)
+        if hasattr(store, "recent_replies"):
+            # Mirror the smart-reply path: exclude this contact so we don't
+            # feed earlier drafts to the same thread back as "style examples".
+            history = store.recent_replies(
+                n=10,
+                exclude_uid=contact.uid if contact else None,
+            )
+    except Exception:
+        pass  # history is purely a quality boost, never required
+
+    _start_tool_spinner()
+    try:
+        from bridges.wechat_smart_reply import generate_candidates
+        candidates = generate_candidates(
+            raw, sender_label, config,
+            contact=contact, history=history,
+        )
+    finally:
+        _stop_tool_spinner()
+
+    if not candidates:
+        err("Drafting failed — auxiliary model returned nothing usable.")
+        info("Check `auxiliary_model` in /config or fall back by setting it to your main model.")
+        return True
+
+    print()
+    for i, c in enumerate(candidates, 1):
+        print(clr(f"  [{i}] ", "cyan", "bold") + c)
+    print()
+    info(clr("Copy one and paste it into WeChat (or wherever) — this is fully manual.", "dim"))
+
+    # If we're inside a bridge turn (the user typed /draft from WeChat /
+    # Telegram / Slack), echo the candidates back to that channel too so
+    # they can see and copy them on their phone.  Best-effort: failures
+    # never break the terminal output.
+    try:
+        import runtime
+        ctx = runtime.get_ctx(config)
+        bridge_text = (
+            f"💬 Drafts for 「{msg_preview}」\n\n"
+            + "\n".join(f"[{i}] {c}" for i, c in enumerate(candidates, 1))
+            + "\n\n回 1/2/3 取那条 · 复制粘贴给对方"
+        )
+        wx_uid = getattr(ctx, "wx_current_user_id", "") or ""
+        if wx_uid:
+            from bridges.wechat import _wx_send
+            from bridges.draft_cache import put as _draft_put
+            # Stash so a follow-up "1"/"2"/"3" from this uid resolves to
+            # the chosen candidate (handled in bridges/wechat.py inbound).
+            _draft_put(wx_uid, candidates)
+            _wx_send(wx_uid, bridge_text, config)
+        if getattr(ctx, "in_telegram_turn", False):
+            chat_id = config.get("telegram_chat_id")
+            token = config.get("telegram_token")
+            if chat_id and token:
+                from bridges.telegram import _tg_send
+                _tg_send(token, chat_id, bridge_text)
+        slack_chan = getattr(ctx, "slack_current_channel", "") or ""
+        if slack_chan:
+            slack_token = config.get("slack_bot_token") or config.get("slack_token")
+            if slack_token:
+                try:
+                    from bridges.slack import _slack_send
+                    _slack_send(slack_token, slack_chan, bridge_text)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return True
+
+
 # ── Worker ─────────────────────────────────────────────────────────────────
 
 def cmd_worker(args: str, state, config) -> bool:

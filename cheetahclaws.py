@@ -63,6 +63,8 @@ Slash commands in REPL:
   /plan done        Exit plan mode and restore permissions
   /plan status      Show plan mode status
   /brainstorm <topic>  Multi-persona iterative brainstorming session
+  /draft <msg>      Draft 3 candidate replies for a message (manual copy/paste)
+  /draft @<contact> <msg>   Same, but tone-conditioned on wx_contacts.json
   /worker           Auto-implement tasks from todo_list.txt
   /agent start <template> [args]  Autonomous agent loop (research_assistant / auto_bug_fixer / paper_writer / auto_coder)
   /agent stop <name>    Stop a running agent
@@ -227,7 +229,7 @@ from commands.checkpoint_plan import cmd_checkpoint, cmd_rewind, cmd_plan
 
 # ── Advanced commands ──────────────────────────────────────────────────────
 from commands.advanced import (
-    cmd_brainstorm, cmd_worker, cmd_ssj,
+    cmd_brainstorm, cmd_worker, cmd_ssj, cmd_draft,
     cmd_memory, cmd_agents, cmd_skills, cmd_mcp, cmd_plugin, cmd_tasks,
     _save_synthesis, _print_background_notifications,
 )
@@ -239,6 +241,7 @@ from commands.agent_cmd import cmd_agent
 from commands.monitor_cmd import cmd_subscribe, cmd_subscriptions, cmd_unsubscribe, cmd_monitor
 
 from commands.research_cmd import cmd_research, cmd_reports
+from commands.lab_cmd import cmd_lab
 
 # ── Tools / thread-local bridge state ─────────────────────────────────────
 from tools import (
@@ -389,6 +392,7 @@ COMMANDS = {
     "image":       cmd_image,
     "img":         cmd_image,
     "brainstorm":  cmd_brainstorm,
+    "draft":       cmd_draft,
     "worker":      cmd_worker,
     "agent":       cmd_agent,
     "ssj":         cmd_ssj,
@@ -406,6 +410,7 @@ COMMANDS = {
     "monitor":     cmd_monitor,
     "research":    cmd_research,
     "reports":     cmd_reports,
+    "lab":         cmd_lab,
     "compact":     cmd_compact,
     "init":        cmd_init,
     "export":      cmd_export,
@@ -532,6 +537,7 @@ _CMD_META: dict[str, tuple[str, list[str]]] = {
     "image":       ("Send clipboard image to model",      []),
     "img":         ("Send clipboard image (alias)",       []),
     "brainstorm":  ("Multi-persona AI debate + auto tasks", []),
+    "draft":       ("Draft 3 reply candidates for a message (manual copy)", []),
     "worker":      ("Auto-implement pending tasks",       []),
     "agent":       ("Autonomous agent loop (task templates)", ["start", "stop", "list", "status", "templates"]),
     "ssj":         ("SSJ Developer Mode — power menu",    []),
@@ -550,6 +556,9 @@ _CMD_META: dict[str, tuple[str, list[str]]] = {
     "doctor":      ("Diagnose installation health",         []),
     "circuit":     ("Show / reset per-provider circuit breakers", ["status", "reset"]),
     "web":         ("Start the web terminal / chat UI in background", ["status", "--no-auth", "--host"]),
+    "lab":         ("Autonomous research lab — multi-agent paper drafting + reviewer iteration",
+                    ["start", "status", "abort", "logs", "resume", "iterate",
+                     "backlog", "daemon", "models", "migrate-paths"]),
     "setup":       ("Run interactive setup wizard",         []),
     "exit":        ("Exit cheetahclaws",              []),
     "quit":        ("Exit (alias for /exit)",             []),
@@ -1275,6 +1284,12 @@ def repl(config: dict, initial_prompt: str = None):
                     warn(f"Shell error: {e}")
             continue
 
+        # Strip leading whitespace so a paste with a stray space (e.g.
+        # ` /lab daemon start`) still hits the slash dispatcher instead
+        # of being routed to the agent. Trailing whitespace is preserved
+        # so command arguments aren't accidentally rstripped.
+        if user_input != user_input.lstrip():
+            user_input = user_input.lstrip()
         result = handle_slash(user_input, state, config)
         # ── Sentinel processing loop ──
         # Processes sentinel tuples returned by commands. SSJ-originated
