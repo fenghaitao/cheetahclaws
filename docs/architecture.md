@@ -839,6 +839,50 @@ events published while the client was away (and still inside the
 retention window) are replayed from SQLite, so observers don't lose
 their event timeline across daemon restarts.
 
+#### Monitor in daemon (F-3)
+
+`monitor/scheduler.py` is now daemon-owned.  When `cheetahclaws serve`
+starts, it kicks the scheduler loop in-process; subscriptions and
+generated reports live in the SQLite `monitor_subscriptions` and
+`monitor_reports` tables (migrated from
+`~/.cheetahclaws/monitor_subscriptions.json` on first daemon run, with
+the JSON file kept readable for one release as fallback).
+
+Behaviour:
+
+- **REPL detects daemon → skips local scheduler.**  When the user types
+  `/monitor start` in REPL while a daemon is running,
+  `commands/monitor_cmd.py` calls `cc_daemon.discovery.locate()`, sees
+  a live daemon, prints "scheduler is owned by the running daemon", and
+  no-ops.  Avoids the race of two schedulers fighting over
+  `last_run_at` and double-firing subscriptions.  `/monitor stop`
+  behaves the same way.
+- **`/monitor subscribe` / `unsubscribe` / `list` always work in REPL.**
+  These hit SQLite directly through `monitor.store`; the daemon picks
+  up the new state on its next 60 s poll.  No RPC round-trip needed.
+- **External clients use RPC.**  `cc_daemon/monitor_methods.py`
+  registers `monitor.subscribe`, `monitor.unsubscribe`, `monitor.list`,
+  `monitor.run` for Web UI / third-party tools that don't share the
+  process tree.
+- **Reports become events.**  `scheduler.run_one()` persists the full
+  report body to `monitor_reports` and publishes a `monitor_report`
+  event on the SSE channel (`{topic, report_id, body, sent_to,
+  errors}`).  SSE subscribers see digests as they land; the
+  `report_id` ties the event back to the row in `monitor_reports` for
+  later retrieval.
+- **Telegram / Slack / WeChat delivery from daemon waits for F-6/7/8.**
+  Until the bridges themselves move into daemon, a subscription
+  configured with `--telegram` will land its report in
+  `monitor_reports` and emit the SSE event when the daemon fires it,
+  but won't actually push to Telegram unless REPL is also running with
+  the bridge connected.
+
+The headline F-3 user-visible win: `/monitor subscribe arxiv
+--schedule daily --console`, then exit REPL — the daemon scheduler
+keeps firing on schedule, reports persist to SQLite, SSE clients see
+each digest as it lands, history is `monitor.list_reports("arxiv")`
+away when the user reconnects.
+
 ### Research Lab (`research/lab/` + `commands/lab_cmd.py` + `web/lab_*`)
 
 Autonomous multi-agent research engine — `/lab start <topic>` (CLI)

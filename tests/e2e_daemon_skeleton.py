@@ -384,6 +384,36 @@ def test_sessions_db_initialised_on_first_serve(tmp_path):
         assert t in names, f"missing table after serve: {t}"
 
 
+def test_monitor_subscribe_via_rpc_survives_daemon_restart(tmp_path):
+    """F-3 headline:  /monitor subscribe via RPC persists into SQLite,
+    daemon stops, daemon starts again, subscription is still listed."""
+    proc1, addr1, token1 = _start_daemon(tmp_path)
+    try:
+        status, body = _post_rpc(addr1, token1, "monitor.subscribe",
+                                  params={"topic": "arxiv",
+                                          "schedule": "daily",
+                                          "channels": ["console"]})
+        assert status == 200
+        assert body["result"]["topic"] == "arxiv"
+
+        status, body = _post_rpc(addr1, token1, "monitor.list")
+        assert status == 200
+        topics = {s["topic"] for s in body["result"]["subscriptions"]}
+        assert "arxiv" in topics
+    finally:
+        _stop_daemon(proc1, addr1, token1)
+
+    proc2, addr2, token2 = _start_daemon(tmp_path)
+    try:
+        status, body = _post_rpc(addr2, token2, "monitor.list")
+        assert status == 200
+        topics = {s["topic"] for s in body["result"]["subscriptions"]}
+        assert "arxiv" in topics, \
+            f"subscription did not survive restart: {topics}"
+    finally:
+        _stop_daemon(proc2, addr2, token2)
+
+
 def test_events_persist_in_sqlite_across_daemon_restart(tmp_path):
     """Publish events on daemon A (echo.ping fires `ping_received`),
     stop daemon A, start daemon B against the same data dir, and

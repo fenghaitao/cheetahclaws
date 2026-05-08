@@ -12,7 +12,7 @@ The "foundation PR" described at the end of [RFC 0001](./0001-daemon-design-note
 |-----|-----------------------------------------------------|------------|---------|--------|
 | F-1 | `daemon/` package skeleton; `serve` + `daemon` CLI  | —          | ~1500   | MERGED #80 |
 | F-2 | SQLite schema + events persistence + jobs migration | F-1        | ~700    | OPEN   |
-| F-3 | `monitor/scheduler` runs in daemon                  | F-2        | ~500    | TODO   |
+| F-3 | `monitor/scheduler` runs in daemon                  | F-2        | ~700    | OPEN   |
 | F-4 | `agent_runner` becomes subprocess-per-agent         | F-2        | ~1000   | TODO   |
 | F-5 | `proactive` watcher runs in daemon                  | F-2        | ~200    | TODO   |
 | F-6 | Telegram bridge in daemon                           | F-2        | ~500    | TODO   |
@@ -134,14 +134,60 @@ is already provided by spike's `cc_daemon/originator.py` +
 
 ## F-3 — monitor in daemon
 
-**Scope.** `monitor/scheduler.py` runs daemon-side; REPL skips its local thread when a daemon is detected.
+**Scope.** `monitor/scheduler.py` runs daemon-side; subscription store
+moves from JSON to the F-2 `monitor_subscriptions` table; reports
+persist + emit SSE events; REPL skips its local scheduler when a
+daemon is detected.
 
-**RPC methods.** `monitor.subscribe`, `monitor.unsubscribe`, `monitor.list`, `monitor.run`.
+**Deliverables.**
+
+- `monitor/store.py` — SQLite-backed (`monitor_subscriptions` and
+  `monitor_reports` tables).  One-shot import of legacy
+  `~/.cheetahclaws/monitor_subscriptions.json` on first call (tracked
+  in `schema_meta.monitor_migrated_from_json`); JSON kept readable for
+  one release.  New helpers: `save_report`, `list_reports`.  Public
+  API of the legacy store unchanged.
+- `monitor/scheduler.py` — `run_one()` persists the full report body
+  via `save_report` and publishes a `monitor_report` event on
+  `cc_daemon.events.get_bus()` with `{topic, report_id, body, sent_to,
+  errors}`.  Loop's idle wait switched from `time.sleep(30)` ×60 to a
+  single `Event.wait(60)` so daemon shutdown isn't stalled by the
+  scheduler thread napping.
+- `cc_daemon/monitor_methods.py` — registers `monitor.subscribe`,
+  `monitor.unsubscribe`, `monitor.list`, `monitor.run` for external
+  clients (Web UI / third-party tools).  `DaemonState.__init__` calls
+  `monitor_methods.register` next to `system_methods`.
+- `cc_daemon/cli.py:cmd_serve` — starts the scheduler with
+  `monitor.scheduler.start(config)` after schema init; the existing
+  shutdown watcher calls `monitor.scheduler.stop()` before triggering
+  HTTP-server shutdown.
+- `commands/monitor_cmd.py` — `/monitor start` and `/monitor stop`
+  detect a live daemon via `cc_daemon.discovery.locate()` and no-op
+  with a friendly message.  `/monitor subscribe` / `unsubscribe` /
+  `list` continue to work in REPL because they hit SQLite directly.
 
 **Acceptance.**
-- `cheetahclaws serve` running → `/monitor subscribe arxiv --schedule daily --telegram` persists to `monitor_subscriptions`; daemon scheduler fires on cadence even after REPL exit.
-- Without daemon: today's behavior unchanged (in-process scheduler thread).
-- Reports persist to `monitor_reports` and emit `monitor_report` SSE events.
+
+- `cheetahclaws serve` running → `monitor.subscribe` over RPC persists
+  to SQLite; daemon scheduler fires on cadence; reports show up in
+  `monitor_reports` and on the SSE channel as `monitor_report` events.
+- Daemon stop → start with same data dir → `monitor.list` over RPC
+  returns the previously-subscribed topics.  (Verified by
+  `tests/e2e_daemon_skeleton.py::test_monitor_subscribe_via_rpc_survives_daemon_restart`.)
+- REPL `/monitor subscribe` while daemon is running: subscription
+  visible via `monitor.list` from outside.  Daemon picks up the new
+  row on its next 60 s poll.
+- Without daemon: today's REPL-only behaviour unchanged
+  (in-process scheduler thread).
+- Telegram / Slack / WeChat delivery from daemon: out of scope for F-3
+  (waits for F-6/F-7/F-8).  Reports + `monitor_report` events still
+  fire so the digest isn't lost; bridges deliver only when REPL is
+  running with the channel connected.
+
+**Tests.** `tests/test_monitor_store_sqlite.py` (18), 
+`tests/test_monitor_scheduler_events.py` (7),
+`tests/test_cc_daemon_monitor_methods.py` (12), plus 1 new e2e in
+`tests/e2e_daemon_skeleton.py` for the survive-restart case.
 
 ## F-4 — agent_runner subprocess
 
