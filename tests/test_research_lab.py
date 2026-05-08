@@ -141,6 +141,79 @@ def test_verify_citations_progress_callback(monkeypatch):
     assert seen == [(1, 3, "verified"), (2, 3, "verified"), (3, 3, "verified")]
 
 
+# ── Output path: human-readable dir names ────────────────────────────────
+
+
+def test_slugify_basic():
+    from research.lab.storage import _slugify
+    assert _slugify("Post-Transformer architectures: SSM vs Mamba 2026") \
+        == "post-transformer-architectures-ssm-vs-mamba-2026"
+    assert _slugify("  hello, world!!  ") == "hello-world"
+    assert _slugify("a-b___c") == "a-b-c"
+
+
+def test_slugify_truncates_at_word_boundary():
+    from research.lab.storage import _slugify
+    long_topic = "comparative analysis of state space models linear attention mixture of experts retentive networks 2026"
+    s = _slugify(long_topic, max_len=60)
+    assert len(s) <= 60
+    assert not s.endswith("-")
+    # Should land on a word, not mid-word.
+    assert s.split("-")[-1] in long_topic.lower().split()
+
+
+def test_slugify_chinese_falls_back_to_untitled():
+    from research.lab.storage import _slugify
+    assert _slugify("后 transformer 时代") == "transformer"   # "transformer" is ASCII
+    assert _slugify("纯中文话题") == "untitled"
+    assert _slugify("") == "untitled"
+
+
+def test_human_dir_name_format():
+    from research.lab.storage import human_dir_name
+    import datetime as _dt
+    # Fixed timestamp: 2026-05-07 18:15:00 local
+    ts = _dt.datetime(2026, 5, 7, 18, 15).timestamp()
+    out = human_dir_name(
+        run_id="lab_b16036de918a",
+        topic="Post-Transformer architectures",
+        created_at=ts,
+    )
+    assert out.startswith("2026-05-07_18-15_post-transformer-architectures_")
+    assert out.endswith("b16036de")
+    # Length sanity — not absurdly long
+    assert len(out) < 90
+
+
+def test_human_dir_name_uniqueness_via_run_id_suffix():
+    """Two runs with the same topic + minute must NOT collide."""
+    from research.lab.storage import human_dir_name
+    import datetime as _dt
+    ts = _dt.datetime(2026, 5, 7, 18, 15).timestamp()
+    a = human_dir_name(run_id="lab_aaaaaaaaaaaa", topic="same topic",
+                       created_at=ts)
+    b = human_dir_name(run_id="lab_bbbbbbbbbbbb", topic="same topic",
+                       created_at=ts)
+    assert a != b
+    assert a.endswith("aaaaaaaa")
+    assert b.endswith("bbbbbbbb")
+
+
+def test_output_dir_for_uses_human_format(tmp_path):
+    from research.lab.storage import output_dir_for
+    import datetime as _dt
+    ts = _dt.datetime(2026, 5, 7, 18, 15).timestamp()
+    p = output_dir_for(
+        run_id="lab_b16036de918a",
+        topic="Post-Transformer architectures",
+        created_at=ts,
+        root=tmp_path,
+    )
+    assert p.parent == tmp_path
+    assert "post-transformer-architectures" in p.name
+    assert p.name.endswith("b16036de")
+
+
 def test_extract_numbered_dedupes_repeated_list():
     """questioner emits 5 RQs then 5 duplicates → keep 5."""
     text = (
@@ -639,8 +712,14 @@ def test_write_markdown_report_assembles_artifacts(tmp_path):
     assert "# Final paper title" in md
     assert "First RQ" in md or "Second RQ" in md
     assert "verified" in md
-    # Files exist on disk
-    paper_dir = tmp_path / "papers" / rec.run_id
+    # Output dir is now <date>_<time>_<slug>_<short> (human-readable),
+    # not the legacy `lab_xxx` path. Resolve via the helper so the test
+    # follows whatever scheme the production code uses.
+    from research.lab.storage import output_dir_for
+    paper_dir = output_dir_for(
+        rec.run_id, rec.topic, rec.created_at,
+        root=tmp_path / "papers",
+    )
     assert (paper_dir / "report.md").exists()
     assert (paper_dir / "references.bib").exists() or True
     assert (paper_dir / "citations_verified.json").exists()

@@ -163,8 +163,15 @@ def run_backlog_worker(*, config: dict,
             run_id = run.state.run_id
 
             if not silent:
-                report_path = (_Path.home() / ".cheetahclaws"
-                               / "research_papers" / run_id / "report.md")
+                from research.lab.storage import output_dir_for
+                rec = storage.get_run(run_id)
+                if rec is not None:
+                    report_path = output_dir_for(
+                        rec.run_id, rec.topic, rec.created_at
+                    ) / "report.md"
+                else:
+                    report_path = (_Path.home() / ".cheetahclaws"
+                                   / "research_papers" / run_id / "report.md")
                 print(_clr(
                     f"  ↳ /lab daemon  📄 [{run_id}] will save to: "
                     f"{report_path}",

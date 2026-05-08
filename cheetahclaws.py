@@ -558,7 +558,7 @@ _CMD_META: dict[str, tuple[str, list[str]]] = {
     "web":         ("Start the web terminal / chat UI in background", ["status", "--no-auth", "--host"]),
     "lab":         ("Autonomous research lab — multi-agent paper drafting + reviewer iteration",
                     ["start", "status", "abort", "logs", "resume", "iterate",
-                     "backlog", "daemon", "models"]),
+                     "backlog", "daemon", "models", "migrate-paths"]),
     "setup":       ("Run interactive setup wizard",         []),
     "exit":        ("Exit cheetahclaws",              []),
     "quit":        ("Exit (alias for /exit)",             []),

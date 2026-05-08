@@ -35,6 +35,50 @@ from typing import Iterable, Iterator, Optional
 DEFAULT_DB_PATH = Path.home() / ".cheetahclaws" / "research_lab.db"
 DEFAULT_OUTPUT_DIR = Path.home() / ".cheetahclaws" / "research_papers"
 
+
+def _slugify(topic: str, *, max_len: int = 60) -> str:
+    """Topic → filesystem-safe ASCII slug.
+
+    Lowercase, ASCII alphanum + '-' only, single-hyphen separators,
+    truncated at ``max_len`` (preferring a hyphen boundary).  CJK or
+    other non-ASCII characters are dropped — if that leaves the slug
+    empty (e.g. a pure-Chinese topic) we fall back to "untitled" so
+    the run_id short suffix still makes the directory unique.
+    """
+    import re as _re
+    s = _re.sub(r"[^A-Za-z0-9]+", "-", topic).strip("-").lower()
+    s = _re.sub(r"-+", "-", s)
+    if len(s) > max_len:
+        truncated = s[:max_len]
+        # Prefer cutting at a hyphen so the slug ends on a word boundary.
+        if "-" in truncated:
+            truncated = truncated.rsplit("-", 1)[0]
+        s = truncated
+    return s or "untitled"
+
+
+def human_dir_name(run_id: str, topic: str, created_at: float) -> str:
+    """Compose a directory name like
+    ``2026-05-07_18-15_post-transformer-architectures-survey_b16036de``.
+
+    The trailing run_id-suffix guarantees uniqueness across two runs
+    with identical topic + minute — without it, a backlog with the
+    same topic queued twice would race on the same path.
+    """
+    import datetime as _dt
+    dt = _dt.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d_%H-%M")
+    slug = _slugify(topic)
+    # run_id format is "lab_<12 hex>"; keep last 8 hex for a compact
+    # but still-unique suffix.
+    short = run_id.replace("lab_", "")[:8]
+    return f"{dt}_{slug}_{short}"
+
+
+def output_dir_for(run_id: str, topic: str, created_at: float,
+                   *, root: Optional[Path] = None) -> Path:
+    """Resolve the absolute output directory for a run."""
+    return (root or DEFAULT_OUTPUT_DIR) / human_dir_name(run_id, topic, created_at)
+
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS lab_runs (
         run_id        TEXT PRIMARY KEY,

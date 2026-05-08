@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from .storage import DEFAULT_OUTPUT_DIR, LabStorage
+from .storage import DEFAULT_OUTPUT_DIR, LabStorage, human_dir_name
 
 if TYPE_CHECKING:
     from .orchestrator import LabRun
@@ -25,9 +25,22 @@ if TYPE_CHECKING:
 
 def write_markdown_report(run: "LabRun", *,
                            output_dir: Optional[Path] = None) -> str:
-    """Compose + persist the Markdown report; return the markdown text."""
+    """Compose + persist the Markdown report; return the markdown text.
+
+    Output directory is now ``<date>_<time>_<topic-slug>_<run_id_short>``
+    instead of the cryptic ``lab_xxxxxxxxxxxx``, so users can find
+    their reports by skimming filenames. Falls back to the run_id-only
+    path when ``run.state.created_at`` isn't available (legacy in-memory
+    runs from tests).
+    """
     out_root = output_dir or DEFAULT_OUTPUT_DIR
-    run_dir = out_root / run.state.run_id
+    rec = run.storage.get_run(run.state.run_id)
+    if rec is not None and getattr(rec, "created_at", None):
+        run_dir = out_root / human_dir_name(
+            run.state.run_id, run.state.topic, rec.created_at
+        )
+    else:
+        run_dir = out_root / run.state.run_id   # legacy / test-only path
     run_dir.mkdir(parents=True, exist_ok=True)
 
     md = _compose(run.state.run_id, run.state.topic, run.storage)
