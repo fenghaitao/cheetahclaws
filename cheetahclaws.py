@@ -109,6 +109,19 @@ Slash commands in REPL:
   /wechat stop|status               Stop or check WeChat bridge
   /slack <token> <channel_id>       Start Slack bridge (Web API)
   /slack stop|status|logout         Stop, check, or clear Slack bridge
+  /lab start <topic>                Autonomous multi-agent research run (9 stages)
+  /lab status [<run_id>]            List runs / detail one run
+  /lab logs <run_id> [n]            Last N agent messages for a run
+  /lab abort <run_id>               Cancel an in-flight run after current stage
+  /lab resume <run_id> [<stage>]    Continue a run; optionally rewind to <stage>
+  /lab iterate <run_id>             Score the report + revise weakest stage; loops to target
+  /lab backlog add <topic> [--iterate] [--target=N] [--max=N] [--prio=N]
+                                    Queue a topic for the daemon
+  /lab backlog list / remove <id> / clear
+                                    Manage the queue
+  /lab daemon start | stop | status 24/7 worker that pulls from the backlog
+  /lab models                       Show effective per-role model assignment
+  /lab migrate-paths [--apply]      Rename legacy lab_xxx/ output dirs to human-readable form
   /exit /quit Exit
 """
 from __future__ import annotations
