@@ -1284,6 +1284,12 @@ def repl(config: dict, initial_prompt: str = None):
                     warn(f"Shell error: {e}")
             continue
 
+        # Strip leading whitespace so a paste with a stray space (e.g.
+        # ` /lab daemon start`) still hits the slash dispatcher instead
+        # of being routed to the agent. Trailing whitespace is preserved
+        # so command arguments aren't accidentally rstripped.
+        if user_input != user_input.lstrip():
+            user_input = user_input.lstrip()
         result = handle_slash(user_input, state, config)
         # ── Sentinel processing loop ──
         # Processes sentinel tuples returned by commands. SSJ-originated
