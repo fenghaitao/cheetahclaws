@@ -812,11 +812,42 @@ def repl(config: dict, initial_prompt: str = None):
         pmode     = clr(config.get("permission_mode", "auto"), "yellow")
         ver_clr   = clr(f"v{VERSION}", "green")
 
-        print(clr("  ╭─ ", "dim") + clr("CheetahClaws ", "cyan", "bold") + ver_clr + clr(" ─────────────────────────────────╮", "dim"))
-        print(clr("  │", "dim") + clr("  Model: ", "dim") + model_clr + " " + prov_clr)
-        print(clr("  │", "dim") + clr("  Permissions: ", "dim") + pmode)
-        print(clr("  │", "dim") + clr("  /model to switch · /help for commands", "dim"))
-        print(clr("  ╰──────────────────────────────────────────────────────╯", "dim"))
+        # ── Banner: aligned box ─────────────────────────────────────────
+        # Compute widths from plain text (strip ANSI escapes from coloring).
+        title_plain = f"CheetahClaws v{VERSION}"
+        line_plains = [
+            f"  Model: {model} ({pname})",
+            f"  Permissions: {config.get('permission_mode', 'auto')}",
+            f"  /model to switch · /help for commands",
+        ]
+        # Inner width = widest content; title needs 3 chars of decoration ("─ X ").
+        inner_w = max(len(title_plain) + 6, *(len(p) for p in line_plains)) + 2
+        # Don't shrink below the previous visual width.
+        inner_w = max(inner_w, 56)
+
+        # Top: ╭─ CheetahClaws vX ─...─╮
+        title_decoration_width = 3 + len(title_plain)  # "─ TITLE "
+        top_trailing = "─" * (inner_w - title_decoration_width)
+        print(
+            clr("  ╭", "dim")
+            + clr("─ ", "dim")
+            + clr("CheetahClaws ", "cyan", "bold")
+            + ver_clr
+            + clr(" ", "dim")
+            + clr(top_trailing + "╮", "dim")
+        )
+
+        # Middle lines — each must close with │, padded to inner_w on the right.
+        def _row(colored: str, plain: str) -> str:
+            pad = " " * (inner_w - len(plain))
+            return clr("  │", "dim") + colored + pad + clr("│", "dim")
+
+        print(_row(clr("  Model: ", "dim") + model_clr + " " + prov_clr, line_plains[0]))
+        print(_row(clr("  Permissions: ", "dim") + pmode,                 line_plains[1]))
+        print(_row(clr(line_plains[2], "dim"),                            line_plains[2]))
+
+        # Bottom: ╰─...─╯ (same inner_w as top)
+        print(clr("  ╰" + "─" * inner_w + "╯", "dim"))
 
         # Show active non-default settings
         active_flags = []
