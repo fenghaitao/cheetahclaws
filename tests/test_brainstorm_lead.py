@@ -145,6 +145,67 @@ def test_lead_probe_strips_code_fences(monkeypatch):
     assert "```" not in out
 
 
+# ── Round-aware probe: round 2+ requires actual challenge ────────────────
+
+
+def test_lead_probe_round2_polite_agreement_gets_probed(monkeypatch):
+    """In round 2+, a polite 'I agree and would add' reply is a DODGE
+    — the probe must demand an actual challenge to a named agent."""
+    captured_user_msg = {}
+
+    def fake_oneshot(model, sys, user, config, **_):
+        captured_user_msg["sys"] = sys
+        captured_user_msg["user"] = user
+        return "> Lead to Agent C: Agent A said 'X'. Attack it or accept it — commit."
+
+    monkeypatch.setattr(adv, "_llm_oneshot", fake_oneshot)
+    out = _lead_probe(
+        "topic", "Engineer", "C",
+        "I agree with Agent A and would add some more thoughts.",
+        "lead-model", {}, round_num=2,
+    )
+    # Probe fired — text contains a "Lead to Agent" demand.
+    assert "Lead to Agent C" in out
+    # The system prompt routed through the round-2+ adversarial branch,
+    # not the round-1 vague-vs-concrete branch.
+    assert "ADVERSARIAL" in captured_user_msg["sys"] or "adversarial" in captured_user_msg["sys"].lower()
+
+
+def test_lead_probe_round2_real_challenge_passes(monkeypatch):
+    """A round-2 contribution that quotes another agent and attacks the
+    claim must NOT be probed."""
+    _patch_llm(monkeypatch, "NO_PROBE")
+    out = _lead_probe(
+        "topic", "Analyst", "B",
+        '### [CHALLENGE → Agent A]\n> "NVDA will hit $200"\n'
+        'Why this fails: ignores SEC overhang. Counter: more likely <$150 by Q3.',
+        "lead-model", {}, round_num=2,
+    )
+    assert out == ""
+
+
+def test_lead_probe_round1_keeps_old_vague_check(monkeypatch):
+    """Round-1 probe behavior is unchanged — concrete-vs-vague check, not
+    the cross-examination check. Captured here so a future change to the
+    round-2 prompt can't accidentally regress round 1."""
+    captured = {}
+
+    def fake_oneshot(model, sys, user, config, **_):
+        captured["sys"] = sys
+        return "NO_PROBE"
+
+    monkeypatch.setattr(adv, "_llm_oneshot", fake_oneshot)
+    _lead_probe(
+        "topic", "Analyst", "A",
+        "Buy NVDA at $145 with stop at $130.",
+        "lead-model", {}, round_num=1,
+    )
+    # The round-1 system prompt does not mention adversarial
+    # cross-examination — that's the round-2+ language.
+    assert "ADVERSARIAL" not in captured["sys"]
+    assert "cross-examination" not in captured["sys"].lower()
+
+
 def test_lead_synthesis_returns_text(monkeypatch):
     _patch_llm(monkeypatch,
                 "## Consensus\n- buy NVDA (backed by: A, B)\n## Dissents\nNo substantive dissents.\n## Concrete Action Plan\n1. ...\n")

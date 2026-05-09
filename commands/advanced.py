@@ -82,21 +82,25 @@ def _llm_oneshot(model: str, system: str, user: str, config: dict, max_chunks: i
 
 def _lead_opening(topic: str, snapshot: str, lead_model: str, config: dict) -> str:
     """Lead opens the debate: defines what success looks like, what to
-    REJECT (no platitudes, no 'consult an advisor', demand specifics).
+    REJECT (no platitudes, no 'consult an advisor', demand specifics),
+    and warns the experts that round 2+ is adversarial cross-examination
+    — politeness is forbidden.
 
     Empty string on failure — the caller continues without an opening,
     which degrades to the previous behavior, not a crash."""
     sys = (
         "You are the LEAD MODERATOR of an expert debate. You are not one "
         "of the experts — you set the agenda and you enforce quality. "
-        "You will be judged on whether the final debate is ACTIONABLE."
+        "You will be judged on whether the final debate is ACTIONABLE "
+        "and whether the experts ACTUALLY challenged each other instead "
+        "of taking turns being polite."
     )
     user = f"""TOPIC: {topic}
 
 PROJECT CONTEXT:
 {snapshot[:2000]}
 
-Your job NOW (the opening): write a tight 6-10 line briefing that the
+Your job NOW (the opening): write a tight 8-12 line briefing that the
 debate will be anchored to. The briefing MUST contain, in this order:
 
 1. What concrete artifact would make this debate USEFUL — name the unit
@@ -112,6 +116,11 @@ debate will be anchored to. The briefing MUST contain, in this order:
    - Restating the question as the answer.
 3. The single hardest question the experts must answer to make their
    contribution worth reading.
+4. **Cross-examination rule for round 2+**: in any round after the first,
+   each expert MUST quote a specific claim from another expert (by letter)
+   and either attack it with a counter-claim OR explicitly accept it.
+   Polite agreement counts as a dodge. The lead will probe any expert
+   who fails to engage adversarially.
 
 Output ONLY the briefing as plain Markdown. No preamble. No "here is
 your briefing:". Start with `### Lead Opening — Debate Anchor`."""
@@ -119,21 +128,56 @@ your briefing:". Start with `### Lead Opening — Debate Anchor`."""
 
 
 def _lead_probe(topic: str, persona_role: str, persona_letter: str,
-                persona_text: str, lead_model: str, config: dict) -> str:
+                persona_text: str, lead_model: str, config: dict,
+                round_num: int = 1) -> str:
     """Lead reads the latest persona's contribution and decides if it's
-    too vague / hand-wavy / dodging the anchor. Returns a short pointed
+    too vague / dodging / non-adversarial. Returns a short pointed
     follow-up question if so, or empty string if the persona was
-    concrete enough.
+    concrete and (in round 2+) actually challenged someone.
 
-    The follow-up is fed back to the SAME persona for one more round,
-    forcing them to commit to specifics."""
-    sys = (
-        "You are the LEAD MODERATOR. Your job is to keep experts honest. "
-        "If the latest contribution is concrete and answers the anchor, "
-        "you stay silent. If it's vague, generic, or dodges the question, "
-        "you ask ONE pointed follow-up that demands a specific commitment."
-    )
-    user = f"""TOPIC: {topic}
+    Round 1: concrete vs vague check.
+    Round 2+: also requires explicit `[CHALLENGE → Agent X]`-style attack
+    on a specific named claim from another agent. A polite "I agree and
+    would add" reply in round 2+ counts as DODGING and earns a probe."""
+    if round_num >= 2:
+        sys = (
+            "You are the LEAD MODERATOR of an ADVERSARIAL debate. Your job "
+            "in this cross-examination round is to make sure no expert dodges "
+            "by being polite. A round-2+ contribution that restates the "
+            "agent's own view, agrees with others, or summarizes the debate "
+            "is a DODGE — even if it's well-written and concrete. Real "
+            "engagement requires quoting another agent's specific claim and "
+            "attacking it."
+        )
+        user = f"""TOPIC: {topic}
+
+LATEST CONTRIBUTION (Agent {persona_letter} — {persona_role}, in a
+ROUND-2+ CROSS-EXAMINATION round):
+{persona_text[:2500]}
+
+Decide which case applies:
+
+A. The contribution contains at least one CHALLENGE block where the
+   agent quotes a specific claim from another agent (by letter) and
+   attacks it with a counter-claim. → respond with:
+       NO_PROBE
+
+B. The contribution is a polite agreement, a synthesis, a defense-only
+   reply, restates the agent's own round-1 ideas, or doesn't quote anyone
+   else. → respond with one short question (≤30 words) that names a
+   specific agent and claim they should challenge:
+       `> Lead to Agent {persona_letter}: Agent X said "...". Attack it
+       or accept it — your call, but commit. Quote and refute, don't dodge.`
+
+Do NOT explain your decision. Output exactly one of the two forms."""
+    else:
+        sys = (
+            "You are the LEAD MODERATOR. Your job is to keep experts honest. "
+            "If the latest contribution is concrete and answers the anchor, "
+            "you stay silent. If it's vague, generic, or dodges the question, "
+            "you ask ONE pointed follow-up that demands a specific commitment."
+        )
+        user = f"""TOPIC: {topic}
 
 LATEST CONTRIBUTION (Agent {persona_letter} — {persona_role}):
 {persona_text[:2500]}
@@ -426,23 +470,48 @@ USER FOCUS: {user_topic}
             )
         else:
             instructions = (
-                f"This is ROUND {round_num} of {total_rounds}. You have ALREADY "
-                "given your initial position in round 1. Your job in this round "
-                "is NOT to repeat yourself. You must:\n\n"
-                "1. Read the full prior debate (below) carefully.\n"
-                "2. Pick 1-2 specific claims from OTHER agents that you "
-                "disagree with, or that you can sharpen / extend, or that you "
-                "now realise change your own position. Quote the agent and "
-                "the exact claim.\n"
-                "3. For each picked claim, take a stand: agree-and-extend / "
-                "disagree-and-counter / synthesize-with-your-own. Give a "
-                "concrete reason grounded in the debate anchor.\n"
-                "4. If a prior agent's claim resolved a question you raised, "
-                "say so explicitly and update your view.\n"
-                f"5. Prefix each engagement with: [Agent {letter} — {name}, "
-                f"round {round_num}]\n"
-                "6. Keep total response to 6-12 lines. Do not re-list your "
-                "round-1 ideas. Do not summarize the debate. Engage."
+                f"This is ROUND {round_num} of {total_rounds} — an "
+                "**ADVERSARIAL CROSS-EXAMINATION** round. You are NOT here "
+                "to politely reinforce other agents. You are here to find "
+                "the WEAKEST CLAIM made by someone else and ATTACK it.\n\n"
+                "MANDATORY (failure to do all of these = wasted round):\n\n"
+                "1. **Quote a specific claim from another agent VERBATIM** "
+                "(not yourself, not a summary — pick one named claim with a "
+                "specific noun in it: a ticker, a number, a file path, a "
+                "command). Identify them by letter, e.g. "
+                "`Agent A claimed: \"...\"`.\n"
+                "2. **Attack at least ONE specific weakness** in that claim. "
+                "Pick from:\n"
+                "   - Their data is wrong / outdated / misinterpreted\n"
+                "   - Their proposed mechanism doesn't produce the outcome "
+                "they predict\n"
+                "   - There's a confounder, contrary case, or base rate they "
+                "ignored\n"
+                "   - The claim is too vague to be tested or falsified\n"
+                "   - The claim contradicts a stronger claim already in the "
+                "debate (cite which one)\n"
+                "3. **Propose a falsifiable counter-claim** with at least one "
+                "specific (a number, a date, a named entity, a measurable "
+                "outcome that would prove you wrong if it didn't happen).\n"
+                "4. (Optional) Defend your own round-1 position against any "
+                "attacks already lodged against you — but this counts SEPARATELY "
+                "from the required challenge above. You can't skip the "
+                "challenge by only defending yourself.\n\n"
+                "FORMAT — use this exact structure for each challenge:\n"
+                "```\n"
+                "### [CHALLENGE → Agent X]\n"
+                "> \"<quoted claim from Agent X, verbatim or near-verbatim>\"\n"
+                "**Why this fails:** <one or two sentences with the specific weakness>\n"
+                "**Counter:** <your falsifiable counter-claim with a specific number/name/date>\n"
+                "```\n\n"
+                "FORBIDDEN: \"great point\", \"I agree, and would add\", "
+                "\"building on what Agent X said\", restating someone's claim "
+                "without attacking it, vague approval, asking the user to "
+                "decide. Synthesis is the LEAD's job in the final stage — "
+                "your job in this round is to stress-test.\n\n"
+                f"Prefix any defense-of-your-own-position section with: "
+                f"[Agent {letter} — {name}, round {round_num} defense]\n\n"
+                "Total response: 8-15 lines. Concise, specific, adversarial."
             )
 
         system_prompt = f"""You are {name}, the {p_data['role']}. Identity: Agent {letter}.
@@ -505,11 +574,11 @@ INSTRUCTIONS:
     # enforces this). Lead probe may run after each persona in any round.
     for round_num in range(1, n_rounds + 1):
         if n_rounds > 1:
-            print(clr(
-                f"\n  ── Round {round_num}/{n_rounds} "
-                f"({'initial positions' if round_num == 1 else 'critique & revise'}) ──",
-                "cyan",
-            ))
+            label = (
+                "initial positions" if round_num == 1
+                else "adversarial cross-examination — agents must attack each other's claims"
+            )
+            print(clr(f"\n  ── Round {round_num}/{n_rounds} ({label}) ──", "cyan"))
             full_log.append(f"\n---\n### Round {round_num}/{n_rounds}")
 
         for i, (p_name, p_data) in enumerate(personas.items()):
@@ -538,13 +607,15 @@ INSTRUCTIONS:
                 else "  └─ Engagement captured.", "dim",
             ))
 
-            # Lead probe — gives the persona one more swing if vague.
-            # Skipped on the very last round (no time for the persona
-            # to revise after the final round anyway).
+            # Lead probe — gives the persona one more swing if vague (in
+            # round 1) or if they dodged the cross-examination (in round
+            # 2+, the probe demands an actual challenge to a named agent).
+            # Skipped on the very last round (no time for the persona to
+            # revise after the final round anyway).
             if round_num < n_rounds:
                 _start_tool_spinner()
                 probe = _lead_probe(user_topic, p_data["role"], letter, content,
-                                     lead_model, config)
+                                     lead_model, config, round_num=round_num)
                 _stop_tool_spinner()
                 if probe:
                     info(clr(f"  └─ Lead probe: {probe[:120]}", "yellow"))
