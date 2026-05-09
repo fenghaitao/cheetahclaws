@@ -60,6 +60,94 @@ _wx_context_tokens: dict = {}
 _wx_seen_msgids: set = set()
 
 
+# ── Single-instance lock ──────────────────────────────────────────────────
+# Two cheetahclaws processes sharing the same WeChat session both poll the
+# same inbound messages → each one independently dispatches a job → user
+# sees double replies. The fix is a process-level pid lock under
+# ``~/.cheetahclaws/wechat.lock`` so only one bridge runs per host. The
+# second instance still works as a REPL — just without WeChat.
+
+import os as _os_lock
+
+_WX_LOCK_PATH = _os_lock.path.expanduser("~/.cheetahclaws/wechat.lock")
+_wx_lock_acquired = False
+
+
+def _wx_pid_alive(pid: int) -> bool:
+    """Return True iff a process with this pid currently exists."""
+    if pid <= 0:
+        return False
+    try:
+        _os_lock.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        # PermissionError → process exists but is owned by another user;
+        # for our single-instance check that still counts as "running".
+        return isinstance(__import__("sys").exc_info()[1], PermissionError)
+    except OSError:
+        return False
+
+
+def _wx_acquire_lock() -> tuple[bool, int]:
+    """Try to acquire the WeChat-bridge single-instance lock.
+
+    Returns ``(acquired, holder_pid)``. ``acquired=True`` means we now own
+    the lock and should start the bridge; ``False`` means another live
+    cheetahclaws process owns it (``holder_pid`` is its pid). A stale
+    lock (holder process dead) is silently reaped and re-acquired.
+    """
+    global _wx_lock_acquired
+    try:
+        _os_lock.makedirs(_os_lock.path.dirname(_WX_LOCK_PATH), exist_ok=True)
+    except OSError:
+        # Best effort — if we can't create the dir, skip the lock entirely
+        # rather than blocking the bridge.
+        _wx_lock_acquired = True
+        return True, 0
+
+    # Read existing holder, if any.
+    if _os_lock.path.exists(_WX_LOCK_PATH):
+        try:
+            with open(_WX_LOCK_PATH, "r", encoding="utf-8") as _f:
+                holder_pid = int((_f.read() or "0").strip() or "0")
+        except (OSError, ValueError):
+            holder_pid = 0
+        if holder_pid and holder_pid != _os_lock.getpid() \
+                and _wx_pid_alive(holder_pid):
+            return False, holder_pid
+        # Stale lock — fall through to overwrite.
+
+    # Write our pid atomically (.tmp swap).
+    tmp_path = _WX_LOCK_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as _f:
+            _f.write(str(_os_lock.getpid()))
+        _os_lock.replace(tmp_path, _WX_LOCK_PATH)
+        _wx_lock_acquired = True
+        # Best-effort cleanup on normal interpreter exit.
+        import atexit as _atexit_lock
+        _atexit_lock.register(_wx_release_lock)
+        return True, _os_lock.getpid()
+    except OSError:
+        return True, 0       # filesystem trouble → don't block bridge
+
+
+def _wx_release_lock() -> None:
+    """Drop the lock if we hold it. Idempotent + safe at shutdown."""
+    global _wx_lock_acquired
+    if not _wx_lock_acquired:
+        return
+    try:
+        if _os_lock.path.exists(_WX_LOCK_PATH):
+            with open(_WX_LOCK_PATH, "r", encoding="utf-8") as _f:
+                holder = (_f.read() or "0").strip()
+            if holder == str(_os_lock.getpid()):
+                _os_lock.unlink(_WX_LOCK_PATH)
+    except OSError:
+        pass
+    _wx_lock_acquired = False
+
+
 # ── HTTP helpers ───────────────────────────────────────────────────────────
 
 def _wx_random_uin() -> str:
@@ -865,6 +953,18 @@ def _wx_supervisor(token: str, base_url: str, config: dict) -> None:
 
 def _wx_start_bridge(config) -> None:
     global _wechat_thread, _wechat_stop
+
+    # Single-instance guard — refuse to start a second bridge against the
+    # same WeChat session (would cause double-dispatch since the two
+    # processes' in-memory dedup sets are independent).
+    acquired, holder_pid = _wx_acquire_lock()
+    if not acquired:
+        warn(f"WeChat bridge already running (pid={holder_pid}) — "
+             f"this REPL will not connect to WeChat.")
+        info("To take over: stop the other instance, then `/wechat start`.")
+        info(f"Lock file: {_WX_LOCK_PATH}")
+        return
+
     token    = config.get("wechat_token", "")
     base_url = config.get("wechat_base_url", _ILINK_BASE_URL)
     _wechat_stop = threading.Event()
@@ -903,9 +1003,11 @@ def cmd_wechat(args: str, _state, config) -> bool:
             _wechat_stop.set()
             _wechat_thread.join(timeout=5)
             _wechat_thread = None
+            _wx_release_lock()
             ok("WeChat bridge stopped.")
         else:
             warn("WeChat bridge is not running.")
+            _wx_release_lock()  # cover stale-lock cleanup if held without thread
         return True
 
     if sub == "status":
@@ -926,6 +1028,7 @@ def cmd_wechat(args: str, _state, config) -> bool:
             _wechat_stop.set()
             _wechat_thread.join(timeout=5)
             _wechat_thread = None
+        _wx_release_lock()
         config.pop("wechat_token", None)
         config.pop("wechat_base_url", None)
         config.pop("wechat_account_id", None)
