@@ -59,30 +59,44 @@ _VALID_SCHEDULES = {"15m", "30m", "1h", "2h", "6h", "12h", "daily", "weekly"}
 
 
 def _parse_subscribe_args(args: str):
-    """Parse '/subscribe <topic> [schedule] [--telegram] [--slack]'."""
-    parts = args.split()
-    topic = None
-    schedule = "daily"
-    channels = []
+    """Parse '/subscribe <topic> [schedule] [--telegram] [--slack]'.
 
-    i = 0
-    while i < len(parts):
-        p = parts[i]
+    Topic may contain spaces (e.g. ``research:7d:Agent OS Benchmark``).
+    The previous parser treated the FIRST whitespace-separated token as
+    the topic and dropped the rest, which truncated multi-word topics
+    coming from the SSJ trend-track menu.
+
+    The new rule: walk left-to-right, peel off ``--flag`` tokens into
+    ``channels``. Among the remaining tokens, if the LAST one is a
+    recognised schedule (in ``_VALID_SCHEDULES``), that's the schedule
+    and everything before it joined by single spaces is the topic.
+    Otherwise the entire non-flag remainder is the topic and schedule
+    keeps its default. This correctly handles all of:
+
+        ai_research                           → ai_research, daily
+        ai_research weekly                    → ai_research, weekly
+        custom:quantum computing weekly       → custom:quantum computing, weekly
+        research:7d:Agent OS Benchmark daily  → research:7d:Agent OS Benchmark, daily
+        research:7d:Agent OS Benchmark        → research:7d:Agent OS Benchmark, daily
+    """
+    parts = args.split()
+    schedule = "daily"
+    channels: list[str] = []
+    topic_tokens: list[str] = []
+
+    for p in parts:
         if p.startswith("--"):
             flag = p[2:]
             if flag in ("telegram", "slack", "console"):
                 channels.append(flag)
-        elif topic is None:
-            topic = p
-        elif p.lower() in _VALID_SCHEDULES:
-            schedule = p.lower()
-        i += 1
+        else:
+            topic_tokens.append(p)
 
-    # Handle "custom:query with spaces" / "research:query with spaces" — rejoin
-    for prefix in ("custom:", "research:"):
-        if topic and topic.lower() == prefix and i < len(parts):
-            topic = prefix + " ".join(parts[1:])
+    # If the last non-flag token is a schedule, peel it off.
+    if topic_tokens and topic_tokens[-1].lower() in _VALID_SCHEDULES:
+        schedule = topic_tokens.pop().lower()
 
+    topic = " ".join(topic_tokens) if topic_tokens else None
     return topic, schedule, channels
 
 

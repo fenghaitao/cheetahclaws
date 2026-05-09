@@ -187,30 +187,71 @@ def research(
 
     # Fan out in parallel. Thread pool size = min(len(specs), 12) — most
     # sources are I/O bound so threads beat processes here.
-    with _cf.ThreadPoolExecutor(max_workers=min(len(specs), 12)) as ex:
+    #
+    # We DON'T use a `with` statement here. The implicit __exit__ calls
+    # `shutdown(wait=True)`, which blocks on any in-flight slow source
+    # (e.g. arxiv hanging on a stuck socket). When the user Ctrl+Cs, the
+    # KeyboardInterrupt fires *during* that join() and Python's atexit
+    # hook then ALSO joins those threads — double-blocking and killing
+    # the REPL. Manual try/finally with cancel_futures=True returns the
+    # partial set of completed sources immediately and lets the hung
+    # source die with the daemon threads.
+    ex = _cf.ThreadPoolExecutor(max_workers=min(len(specs), 12))
+    try:
         futures = {ex.submit(_run, s): s for s in specs}
-        for fut in _cf.as_completed(futures, timeout=source_timeout * 2):
-            spec = futures[fut]
-            try:
-                name, rs, st, from_cache = fut.result(timeout=source_timeout)
-            except Exception as e:
-                st = SourceStatus(
-                    name=spec.name, ok=False,
-                    error=f"{type(e).__name__}: {str(e)[:160]}",
-                )
-                rs = []
-                from_cache = False
-            all_results.extend(rs)
-            statuses.append(st)
-            if from_cache:
-                cache_hits += 1
-            if progress_cb:
-                if st.skipped_reason:
-                    progress_cb(spec.name, "skipped")
-                elif not st.ok:
-                    progress_cb(spec.name, "error")
-                else:
-                    progress_cb(spec.name, "done")
+        try:
+            iterator = _cf.as_completed(futures, timeout=source_timeout * 2)
+            for fut in iterator:
+                spec = futures[fut]
+                try:
+                    name, rs, st, from_cache = fut.result(timeout=source_timeout)
+                except Exception as e:
+                    st = SourceStatus(
+                        name=spec.name, ok=False,
+                        error=f"{type(e).__name__}: {str(e)[:160]}",
+                    )
+                    rs = []
+                    from_cache = False
+                all_results.extend(rs)
+                statuses.append(st)
+                if from_cache:
+                    cache_hits += 1
+                if progress_cb:
+                    if st.skipped_reason:
+                        progress_cb(spec.name, "skipped")
+                    elif not st.ok:
+                        progress_cb(spec.name, "error")
+                    else:
+                        progress_cb(spec.name, "done")
+        except _cf.TimeoutError:
+            # One or more sources didn't finish within source_timeout * 2.
+            # Mark each unfinished source as timed-out and continue with
+            # the partial result set we already have.
+            for fut, spec in futures.items():
+                if not fut.done():
+                    statuses.append(SourceStatus(
+                        name=spec.name, ok=False,
+                        error="timeout (aggregator deadline exceeded)",
+                    ))
+                    if progress_cb:
+                        progress_cb(spec.name, "error")
+        except KeyboardInterrupt:
+            # User interrupted during the wait — surface partial results
+            # and let the executor be torn down without blocking. The
+            # outer caller can decide to re-raise or swallow.
+            for fut, spec in futures.items():
+                if not fut.done():
+                    statuses.append(SourceStatus(
+                        name=spec.name, ok=False,
+                        error="interrupted by user",
+                    ))
+            raise
+    finally:
+        # cancel_futures=True (Python 3.9+) drops queued-but-not-started
+        # work. wait=False leaves any thread that's already running to
+        # finish on its own time; it's a daemon thread and will die
+        # silently with the process.
+        ex.shutdown(wait=False, cancel_futures=True)
 
     # Dedupe + rank + cap
     deduped = _rank.dedupe(all_results)

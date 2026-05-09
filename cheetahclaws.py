@@ -1365,7 +1365,18 @@ def repl(config: dict, initial_prompt: str = None):
         # so command arguments aren't accidentally rstripped.
         if user_input != user_input.lstrip():
             user_input = user_input.lstrip()
-        result = handle_slash(user_input, state, config)
+        # Wrap in KeyboardInterrupt guard so Ctrl+C during a slow
+        # synchronous slash command (/monitor run, /research, /trading
+        # backtest, etc.) just cancels that command and returns to the
+        # prompt, instead of unwinding the whole REPL → main() → process.
+        # The previous behavior printed a traceback through atexit and
+        # left the user at a bash shell.
+        try:
+            result = handle_slash(user_input, state, config)
+        except KeyboardInterrupt:
+            _track_ctrl_c()
+            print(clr("\n  (command interrupted)", "yellow"))
+            continue
         # ── Sentinel processing loop ──
         # Processes sentinel tuples returned by commands. SSJ-originated
         # sentinels loop back to the SSJ menu after completion.
@@ -1406,7 +1417,13 @@ def repl(config: dict, initial_prompt: str = None):
                 if slash_line.strip().lower() == "/ssj":
                     result = handle_slash("/ssj", state, config)
                     continue
-                inner = handle_slash(slash_line, state, config)
+                try:
+                    inner = handle_slash(slash_line, state, config)
+                except KeyboardInterrupt:
+                    _track_ctrl_c()
+                    print(clr("\n  (command interrupted)", "yellow"))
+                    result = handle_slash("/ssj", state, config)
+                    continue
                 if isinstance(inner, tuple):
                     result = inner
                     continue
@@ -1416,7 +1433,13 @@ def repl(config: dict, initial_prompt: str = None):
             # Delegate to the real command and re-process its returned sentinel
             if result[0] == "__ssj_cmd__":
                 _, cmd_name, cmd_args = result
-                inner = handle_slash(f"/{cmd_name} {cmd_args}".strip(), state, config)
+                try:
+                    inner = handle_slash(f"/{cmd_name} {cmd_args}".strip(), state, config)
+                except KeyboardInterrupt:
+                    _track_ctrl_c()
+                    print(clr("\n  (command interrupted)", "yellow"))
+                    result = handle_slash("/ssj", state, config)
+                    continue
                 if isinstance(inner, tuple):
                     # Tag so we know to loop back to SSJ after processing
                     result = ("__ssj_wrap__", inner)
