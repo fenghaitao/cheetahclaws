@@ -1116,15 +1116,16 @@ def repl(config: dict, initial_prompt: str = None):
             return "simple"
         # Process sentinels the same way the REPL does
         if result[0] == "__brainstorm__":
-            _, brain_prompt, brain_out_file = result
-            run_query(brain_prompt)
-            _save_synthesis(state, brain_out_file)
+            _, brain_payload, brain_out_file = result
             _todo_path = str(Path(brain_out_file).parent / "todo_list.txt")
             run_query(
-                f"Based on the Master Plan you just synthesized, generate a todo list file at {_todo_path}. "
+                brain_payload + "\n\n"
+                f"Now generate a todo list file at {_todo_path}. "
                 "Format: one task per line, each starting with '- [ ] '. "
-                "Order by priority. Include ALL actionable items from the plan. "
-                "Use the Write tool to create the file. Do NOT explain, just write the file now."
+                "Order by priority. Include every concrete action from the "
+                "master plan above. Use the Write tool to create the file. "
+                "Do NOT echo the master plan back, do NOT Read anything, "
+                "just call Write once."
             )
         elif result[0] == "__worker__":
             _, worker_tasks = result
@@ -1431,20 +1432,28 @@ def repl(config: dict, initial_prompt: str = None):
             else:
                 _from_ssj_flag = result[0] == "__ssj_query__"
 
-            # Brainstorm sentinel: ("__brainstorm__", synthesis_prompt, out_file)
+            # Brainstorm sentinel: ("__brainstorm__", todo_payload, out_file)
+            # The lead moderator now does opening + probe + synthesis inside
+            # cmd_brainstorm and writes everything to out_file. todo_payload
+            # already inlines the master plan, so the main agent only needs
+            # to write the TODO file — no Read, no re-synthesis. This
+            # eliminates the duplicate-Read pattern that weak models like
+            # qwen2.5 fell into when asked to Read-then-rewrite.
             if result[0] == "__brainstorm__":
-                _, brain_prompt, brain_out_file = result
-                print(clr("\n  ── Analysis from Main Agent ──", "dim"))
+                _, brain_payload, brain_out_file = result
+                _todo_path = str(Path(brain_out_file).parent / "todo_list.txt")
+                print(clr("\n  ── Generating TODO List from Lead Synthesis ──", "dim"))
                 try:
-                    run_query(brain_prompt)
-                    _save_synthesis(state, brain_out_file)
-                    _todo_path = str(Path(brain_out_file).parent / "todo_list.txt")
-                    print(clr("\n  ── Generating TODO List from Master Plan ──", "dim"))
                     run_query(
-                        f"Based on the Master Plan you just synthesized, generate a todo list file at {_todo_path}. "
+                        brain_payload + "\n\n"
+                        f"Now generate a todo list file at {_todo_path}. "
                         "Format: one task per line, each starting with '- [ ] '. "
-                        "Order by priority. Include ALL actionable items from the plan. "
-                        "Use the Write tool to create the file. Do NOT explain, just write the file now."
+                        "Order by priority. Include every concrete action from "
+                        "the master plan above (with names / numbers / paths "
+                        "intact — do NOT generalize). Use the Write tool to "
+                        "create the file with the FULL list as content. Do "
+                        "NOT echo the master plan back, do NOT Read anything, "
+                        "just call Write once."
                     )
                     info(f"TODO list saved to {_todo_path}. Edit it freely, then use /worker to start implementing.")
                 except KeyboardInterrupt:

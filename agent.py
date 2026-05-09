@@ -113,6 +113,18 @@ def run(
     # happens. Bounded to one shot per user message to prevent any loop.
     _nudges_remaining = 1 if _looks_like_investigation(user_message) else 0
 
+    # Read-only dedup: when the model fires the same Read/Glob/Grep/WebFetch/
+    # WebSearch call with identical args twice in this run(), short-circuit
+    # the second one. We still append a synthetic tool_result to history
+    # (the OpenAI/Anthropic format requires tool_calls ↔ tool_response
+    # pairing) but the result is a brief reminder telling the model the
+    # content is already in its context — and we suppress the UI yields
+    # so the user doesn't see `⚙ Read(…)` printed twice for the same file.
+    # Catches the qwen2.5 pattern where the same file gets Read in two
+    # consecutive turns, then the master plan gets echoed as text twice.
+    _readonly_sigs_seen: set[str] = set()
+    _READ_ONLY_TOOLS = {"Read", "Glob", "Grep", "WebFetch", "WebSearch"}
+
     while True:
         if cancel_check and cancel_check():
             return
@@ -321,6 +333,37 @@ def run(
             })
             break
 
+        # Read-only dedup: walk the batch first, mark any read-only call
+        # whose (name, args) signature already fired in this run() as a
+        # short-circuit. The actual execution + UI yields will skip these,
+        # but a synthetic tool_result still gets appended to history so the
+        # OpenAI/Anthropic tool_calls ↔ tool_response pairing stays valid.
+        _redundant_tcs: dict[str, str] = {}   # tool_call id → reminder text
+        for tc in tool_calls:
+            if tc.get("name") not in _READ_ONLY_TOOLS:
+                continue
+            try:
+                _args_blob = _j_loop.dumps(tc.get("input", {}) or {},
+                                            sort_keys=True, default=str)
+            except Exception:
+                continue
+            _ro_sig = f"{tc['name']}:{_h_loop.md5(_args_blob.encode('utf-8','ignore')).hexdigest()}"
+            if _ro_sig in _readonly_sigs_seen:
+                _arg_summary = _args_blob[:120]
+                _redundant_tcs[tc["id"]] = (
+                    f"[deduped] You already called {tc['name']} with these "
+                    f"args earlier in this turn ({_arg_summary}). The result "
+                    f"is identical to your previous tool result — do not "
+                    f"re-call read-only tools, use the content already in "
+                    f"your context."
+                )
+                _log.info("readonly_dedup",
+                           session_id=session_id,
+                           tool=tc["name"],
+                           sig=_ro_sig)
+            else:
+                _readonly_sigs_seen.add(_ro_sig)
+
         # Check permissions first (must be sequential — may prompt user)
         permissions: dict[str, bool] = {}
         for tc in tool_calls:
@@ -334,12 +377,14 @@ def run(
                     permitted = req.granted
             permissions[tc["id"]] = permitted
 
-        # Determine which tools can run in parallel
+        # Determine which tools can run in parallel — but treat redundant
+        # read-only calls as "sequential" (and short-circuit during exec)
+        # so the dedup path always lands on a single, predictable code path.
         from tool_registry import get_tool as _get_tool
         parallel_batch = []
         sequential_batch = []
         for tc in tool_calls:
-            if not permissions[tc["id"]]:
+            if not permissions[tc["id"]] or tc["id"] in _redundant_tcs:
                 sequential_batch.append(tc)
                 continue
             tdef = _get_tool(tc["name"])
@@ -351,6 +396,12 @@ def run(
         def _exec_one(tc):
             """Execute a single tool call, return (tc, result, permitted)."""
             tid = tc["id"]
+            # Read-only dedup short-circuit: skip the actual execute_tool
+            # call, return the synthetic reminder as the tool result. Marked
+            # `permitted=True` so downstream loop-error counters don't treat
+            # it as a denial.
+            if tid in _redundant_tcs:
+                return tc, _redundant_tcs[tid], True
             permitted = permissions[tid]
             if not permitted:
                 if config.get("permission_mode") == "plan":
@@ -388,9 +439,14 @@ def run(
 
         # Run sequential batch one by one
         for tc in sequential_batch:
-            yield ToolStart(tc["name"], tc["input"])
-            _log.debug("tool_start", session_id=session_id,
-                       tool=tc["name"], input_keys=list(tc["input"].keys()))
+            if tc["id"] not in _redundant_tcs:
+                yield ToolStart(tc["name"], tc["input"])
+                _log.debug("tool_start", session_id=session_id,
+                           tool=tc["name"], input_keys=list(tc["input"].keys()))
+            else:
+                # Tell the user *something* happened, but tersely — don't
+                # repeat the full ⚙ Read(<long path>) line.
+                yield TextChunk(f"\n[deduped {tc['name']}: already in context]\n")
             tc, result, permitted = _exec_one(tc)
             _log.debug("tool_end", session_id=session_id,
                        tool=tc["name"], permitted=permitted,
@@ -400,7 +456,12 @@ def run(
         # Yield results and append to state in original order
         _all_errors = bool(results_ordered)
         for tc, result, permitted in results_ordered:
-            yield ToolEnd(tc["name"], result, permitted)
+            # Suppress the visible ToolEnd for deduped calls — the brief
+            # `[deduped ...]` line above is enough. The tool_result still
+            # gets appended to state.messages so the next API request has
+            # a valid tool_calls ↔ tool_response pairing.
+            if tc["id"] not in _redundant_tcs:
+                yield ToolEnd(tc["name"], result, permitted)
             state.messages.append({
                 "role":         "tool",
                 "tool_call_id": tc["id"],

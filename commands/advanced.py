@@ -20,6 +20,174 @@ from tools import _is_in_tg_turn, _is_in_web_turn
 # ── Brainstorm ─────────────────────────────────────────────────────────────
 
 
+def _parse_lead_flag(args: str) -> tuple[str | None, str]:
+    """Pull `--lead <model>` out of `args`, return (lead_model_or_None, remaining).
+
+    The lead is a separate model that opens the debate (frames the agenda
+    and what to AVOID), probes weak/vague claims after each persona, and
+    produces the final dense synthesis. Default (no flag) reuses
+    config["model"] for all three roles.
+    """
+    import re as _re_lead
+    pattern = _re_lead.compile(r"--lead(?:=|\s+)([^\s]+)")
+    m = pattern.search(args)
+    if not m:
+        return None, args
+    return m.group(1), (args[:m.start()] + args[m.end():]).strip()
+
+
+def _llm_oneshot(model: str, system: str, user: str, config: dict, max_chunks: int = 4000) -> str:
+    """Single-turn LLM call with no tools, returns concatenated text.
+
+    Used by the lead helpers below — opening / probe / synthesis all want
+    a clean prose response with no tool plumbing involved. Failures are
+    silent (return ""); callers fall back to skipping the stage so a
+    flaky lead model never breaks the brainstorm flow.
+    """
+    from providers import stream, TextChunk
+    internal = config.copy()
+    internal["no_tools"] = True
+    chunks: list[str] = []
+    try:
+        for ev in stream(model, system, [{"role": "user", "content": user}], [], internal):
+            if isinstance(ev, TextChunk):
+                chunks.append(ev.text)
+                if len(chunks) >= max_chunks:
+                    break
+    except Exception:
+        return ""
+    return "".join(chunks).strip()
+
+
+def _lead_opening(topic: str, snapshot: str, lead_model: str, config: dict) -> str:
+    """Lead opens the debate: defines what success looks like, what to
+    REJECT (no platitudes, no 'consult an advisor', demand specifics).
+
+    Empty string on failure — the caller continues without an opening,
+    which degrades to the previous behavior, not a crash."""
+    sys = (
+        "You are the LEAD MODERATOR of an expert debate. You are not one "
+        "of the experts — you set the agenda and you enforce quality. "
+        "You will be judged on whether the final debate is ACTIONABLE."
+    )
+    user = f"""TOPIC: {topic}
+
+PROJECT CONTEXT:
+{snapshot[:2000]}
+
+Your job NOW (the opening): write a tight 6-10 line briefing that the
+debate will be anchored to. The briefing MUST contain, in this order:
+
+1. What concrete artifact would make this debate USEFUL — name the unit
+   of an answer the user actually needs (e.g. "specific tickers with a
+   thesis, not 'consider semiconductors'"; "concrete config keys with
+   defaults, not 'add observability'"; "named refactors with file paths,
+   not 'improve modularity'"). Be very specific to THIS topic.
+2. The 2-3 cheap escape hatches we will NOT accept. Examples by category:
+   - Generic disclaimers ("consult a financial advisor", "do your own
+     research", "this is not legal advice").
+   - "Consider diversification / consult experts / monitor regularly"
+     style filler.
+   - Restating the question as the answer.
+3. The single hardest question the experts must answer to make their
+   contribution worth reading.
+
+Output ONLY the briefing as plain Markdown. No preamble. No "here is
+your briefing:". Start with `### Lead Opening — Debate Anchor`."""
+    return _llm_oneshot(lead_model, sys, user, config)
+
+
+def _lead_probe(topic: str, persona_role: str, persona_letter: str,
+                persona_text: str, lead_model: str, config: dict) -> str:
+    """Lead reads the latest persona's contribution and decides if it's
+    too vague / hand-wavy / dodging the anchor. Returns a short pointed
+    follow-up question if so, or empty string if the persona was
+    concrete enough.
+
+    The follow-up is fed back to the SAME persona for one more round,
+    forcing them to commit to specifics."""
+    sys = (
+        "You are the LEAD MODERATOR. Your job is to keep experts honest. "
+        "If the latest contribution is concrete and answers the anchor, "
+        "you stay silent. If it's vague, generic, or dodges the question, "
+        "you ask ONE pointed follow-up that demands a specific commitment."
+    )
+    user = f"""TOPIC: {topic}
+
+LATEST CONTRIBUTION (Agent {persona_letter} — {persona_role}):
+{persona_text[:2500]}
+
+Decide: is this concrete and useful, or is it filler?
+
+If CONCRETE (names specific things, takes a position, gives numbers /
+file paths / tickers / config keys / commands), respond with the single
+literal token:
+    NO_PROBE
+
+If VAGUE (uses 'consider', 'evaluate', 'should', 'monitor regularly',
+'consult experts', 'diversify' without naming what, etc.), respond
+with one short question (≤25 words) that demands a specific commitment.
+Format: `> Lead to Agent {persona_letter}: <question>`
+
+Do NOT explain your decision. Output exactly one of the two forms."""
+    out = _llm_oneshot(lead_model, sys, user, config).strip()
+    if not out or out.upper().startswith("NO_PROBE"):
+        return ""
+    # Trim accidental wrapping fences / prefixes
+    if out.startswith("```"):
+        out = out.strip("`").strip()
+    return out
+
+
+def _lead_synthesis(topic: str, transcript: str, lead_model: str,
+                    config: dict) -> str:
+    """Lead produces the final structured synthesis. NO tool calls
+    needed — the entire transcript is in the prompt context. This is
+    what replaces the old "main agent reads file then synthesizes"
+    flow that caused the duplicate-Read bug."""
+    sys = (
+        "You are the LEAD MODERATOR producing the final synthesis. The "
+        "user will read THIS document and act on it. Filler is malpractice."
+    )
+    user = f"""TOPIC: {topic}
+
+FULL DEBATE TRANSCRIPT (each section is one expert's contribution,
+in the order they spoke):
+
+{transcript}
+
+Produce the synthesis as Markdown with EXACTLY these four sections,
+in this order:
+
+## Consensus
+A bulleted list of claims that ≥2 experts backed. For each bullet,
+end with `(backed by: A, C)` listing the agent letters. Each claim
+must be SPECIFIC — name what / how much / which file / which ticker.
+If experts only agreed at the abstract level ("we should diversify"),
+do NOT list that — drop it instead.
+
+## Dissents
+Bullet list of claims where experts disagreed, each phrased as
+`X says A, Y says B — bottom line: <your call as moderator>`. If no
+real disagreement, write a single line: `No substantive dissents.`
+
+## Concrete Action Plan
+A NUMBERED list of 5-10 actions the user can take TOMORROW. Each
+action must have:
+  - A specific noun (a ticker / file path / config key / command /
+    person to call) — never "research X" without naming the next
+    output of that research.
+  - An owner if applicable (you, the user, an advisor).
+  - A binary done/not-done acceptance criterion.
+
+## What Was Filler
+1-3 bullets calling out the cheap escape hatches the experts tried
+(if any). Be blunt. If none, omit the section entirely.
+
+Output ONLY the four sections. No preamble. No "here is the synthesis"."""
+    return _llm_oneshot(lead_model, sys, user, config)
+
+
 def _parse_models_flag(args: str) -> tuple[list[str], str]:
     """Pull `--models a,b,c` out of `args`, return (models, remaining_args).
 
@@ -107,11 +275,12 @@ def cmd_brainstorm(args: str, state, config) -> bool:
     claude_content = claude_md.read_text("utf-8", errors="replace") if claude_md.exists() else ""
     project_files = "\n".join([f.name for f in Path(".").glob("*") if f.is_file() and not f.name.startswith(".")])
 
-    # Pull the optional `--models a,b,c` flag out before treating the rest
-    # of args as the topic. When provided, each persona is assigned a model
-    # round-robin from the list, so a 5-persona session with two models
-    # alternates 1, 2, 1, 2, 1.
-    persona_models, args_remaining = _parse_models_flag(args)
+    # Pull optional flags before treating the remainder as topic.
+    # `--models a,b,c` distributes models round-robin across personas.
+    # `--lead <model>` picks who runs the moderator role (opening, probes,
+    # synthesis). Both default to config["model"] when omitted.
+    lead_model_override, args_remaining = _parse_lead_flag(args)
+    persona_models, args_remaining = _parse_models_flag(args_remaining)
     user_topic = args_remaining.strip() or "general project improvement and architectural evolution"
 
     if _is_in_tg_turn(config) or _is_in_web_turn(config):
@@ -160,12 +329,26 @@ USER FOCUS: {user_topic}
     ts = time.strftime("%Y%m%d_%H%M%S")
     out_file = outputs_dir / f"brainstorm_{ts}.md"
 
+    # Lead model defaults to the current session model unless --lead overrode.
+    lead_model = lead_model_override or curr_model
+
     brainstorm_history = []
+    ok(f"Starting {agent_count}-Agent Brainstorming Session on: {clr(user_topic, 'bold')}")
     if persona_models:
-        ok(f"Starting {agent_count}-Agent Brainstorming Session on: {clr(user_topic, 'bold')}")
         info(clr(f"Multi-model debate across: {', '.join(persona_models)}", "dim"))
+    if lead_model != curr_model:
+        info(clr(f"Lead moderator: {lead_model}", "dim"))
+
+    # ── Stage 1: Lead opening — set the agenda + reject filler. ──────────
+    info(clr("Lead moderator framing the debate...", "dim"))
+    _start_tool_spinner()
+    lead_opening = _lead_opening(user_topic, snapshot, lead_model, config)
+    _stop_tool_spinner()
+    if lead_opening:
+        print(clr("  └─ Anchor set.", "dim"))
     else:
-        ok(f"Starting {agent_count}-Agent Brainstorming Session on: {clr(user_topic, 'bold')}")
+        info(clr("  (lead opening failed — personas will run without an anchor)", "dim"))
+
     info(clr("Generating diverse perspectives...", "dim"))
 
     def _model_for_index(i: int) -> str:
@@ -175,24 +358,39 @@ USER FOCUS: {user_topic}
             return persona_models[i % len(persona_models)]
         return curr_model
 
-    def call_persona(persona_name, p_data, history, persona_model: str):
+    def call_persona(persona_name, p_data, history, persona_model: str,
+                     anchor: str, follow_up: str = ""):
         letter, name = get_identity(persona_name[0].upper())
+        anchor_block = (
+            f"\nDEBATE ANCHOR (set by the lead moderator — adhere to this):\n{anchor}\n"
+            if anchor else ""
+        )
         system_prompt = f"""You are {name}, the {p_data['role']}. Identity: Agent {letter}.
 {p_data['desc']}
 
 TOPIC UNDER DISCUSSION: {user_topic}
-
+{anchor_block}
 PROJECT CONTEXT (if relevant to the topic):
 {snapshot}
 
 INSTRUCTIONS:
-1. Provide 3-5 concrete, actionable insights or ideas from your expert perspective on the topic.
+1. Provide 3-5 concrete, actionable insights or ideas from your expert perspective on the topic. Adhere to the debate anchor — concrete artifacts only, no filler.
 2. If there are prior ideas from other agents, briefly acknowledge them and build upon or challenge them.
 3. Be specific, well-reasoned, and professional. Stay in character as your role.
 4. Prefix each of your points with: [Agent {letter} — {name}]
 5. Output your response in clean Markdown.
 """
-        user_msg = f"TOPIC: {user_topic}\n\nPRIOR IDEAS FROM DEBATE:\n{history or 'No previous ideas yet. You are the first to speak.'}"
+        if follow_up:
+            user_msg = (
+                f"TOPIC: {user_topic}\n\n"
+                f"PRIOR DEBATE:\n{history}\n\n"
+                f"FOLLOW-UP FROM LEAD MODERATOR (you must answer this directly, in 4-8 lines, with the specifics it asks for):\n{follow_up}"
+            )
+        else:
+            user_msg = (
+                f"TOPIC: {user_topic}\n\n"
+                f"PRIOR IDEAS FROM DEBATE:\n{history or 'No previous ideas yet. You are the first to speak.'}"
+            )
         full_response = []
         internal_config = config.copy()
         internal_config["no_tools"] = True
@@ -211,47 +409,85 @@ INSTRUCTIONS:
     full_log = [
         f"# Brainstorming Session: {user_topic}",
         f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"**Models:** {_model_summary}",
+        f"**Personas via:** {_model_summary}",
+        f"**Lead moderator:** {lead_model}",
         "---",
     ]
+    if lead_opening:
+        full_log.append(f"## 🎯 Lead Opening\n{lead_opening}")
 
+    # ── Stage 2: Personas — round-robin, with optional lead probe. ───────
     for i, (p_name, p_data) in enumerate(personas.items()):
         icon = p_data.get("icon", "🤖")
         p_model = _model_for_index(i)
+        letter = p_name[0].upper()
         if persona_models:
             info(f"{icon} {clr(p_data['role'], 'yellow')} ({clr(p_model, 'dim')}) is thinking...")
         else:
             info(f"{icon} {clr(p_data['role'], 'yellow')} is thinking...")
         _start_tool_spinner()
         hist_text = "\n\n".join(brainstorm_history) if brainstorm_history else ""
-        content = call_persona(p_name, p_data, hist_text, p_model)
+        content = call_persona(p_name, p_data, hist_text, p_model, lead_opening)
         _stop_tool_spinner()
-        if content:
-            brainstorm_history.append(content)
-            # Tag each persona section with its model so the synthesizer
-            # can weight by source diversity rather than raw count.
-            full_log.append(f"## {icon} {p_data['role']} _(via {p_model})_\n{content}")
-            print(clr("  └─ Perspective captured.", "dim"))
-        else:
+        if not content:
             err(f"  └─ Failed to capture {p_name} perspective.")
+            continue
+        brainstorm_history.append(content)
+        full_log.append(f"## {icon} {p_data['role']} _(via {p_model})_\n{content}")
+        print(clr("  └─ Perspective captured.", "dim"))
+
+        # Lead probe — gives the persona one more swing if the first was vague.
+        _start_tool_spinner()
+        probe = _lead_probe(user_topic, p_data["role"], letter, content, lead_model, config)
+        _stop_tool_spinner()
+        if probe:
+            info(clr(f"  └─ Lead probe: {probe[:120]}", "yellow"))
+            _start_tool_spinner()
+            follow = call_persona(p_name, p_data, hist_text, p_model, lead_opening,
+                                  follow_up=probe)
+            _stop_tool_spinner()
+            if follow:
+                brainstorm_history.append(f"_(follow-up to lead probe)_\n{follow}")
+                full_log.append(f"### 🔍 Lead probe + Agent {letter} reply\n{probe}\n\n{follow}")
+                print(clr("  └─ Follow-up captured.", "dim"))
+
+    # ── Stage 3: Lead synthesis — done HERE (not via main agent). ────────
+    info(clr("Lead moderator producing final synthesis...", "dim"))
+    _start_tool_spinner()
+    transcript_for_synth = "\n\n".join(full_log[5 if lead_opening else 4:])  # skip header/anchor
+    lead_master_plan = _lead_synthesis(user_topic, transcript_for_synth, lead_model, config)
+    _stop_tool_spinner()
+    if lead_master_plan:
+        full_log.append("---\n## 📋 Lead Synthesis — Master Plan\n" + lead_master_plan)
+        print(clr("  └─ Synthesis complete.", "dim"))
+    else:
+        warn("  └─ Lead synthesis failed — falling back to bare debate transcript.")
 
     final_output = "\n\n".join(full_log)
-    out_file.write_text(final_output, encoding="utf-8")
-    ok(f"Brainstorming complete! Results saved to {clr(str(out_file), 'bold')}")
-
-    info(clr("Injecting debate results into current session for final analysis...", "dim"))
-    # Resolve to an absolute path before injecting into the model's prompt.
-    # Without this, the relative `brainstorm_outputs/<file>` makes the model
-    # invent an absolute prefix (e.g. it once expanded to a stale `PR/` path
-    # from an unrelated source tree) and Read fails. The system prompt also
-    # tells models to "always use absolute paths", so we owe them one.
     out_file_abs = out_file.resolve()
-    synthesis_prompt = f"""I have just completed a multi-agent brainstorming session regarding: '{user_topic}'.
-The full debate results have been saved to the file: {out_file_abs}
+    out_file.write_text(final_output, encoding="utf-8")
+    ok(f"Brainstorming complete! Results saved to {clr(str(out_file_abs), 'bold')}")
 
-Please read that file (use the absolute path above verbatim — do NOT prepend any directory), then analyze the diverse perspectives. Identify the strongest ideas, potential conflicts, and provide a synthesized 'Master Plan' with concrete phases. Be concise and actionable."""
+    # The TODO prompt INLINES the master plan, so the main agent does NOT
+    # need to Read the file — eliminates the duplicate-Read pattern that
+    # weak models (qwen2.5 etc.) were prone to. If the lead failed to
+    # produce a plan, fall back to telling the agent to read the file.
+    if lead_master_plan:
+        todo_payload = (
+            "I just ran a multi-persona brainstorming session moderated by a "
+            f"lead model. Here is the lead's final master plan for: '{user_topic}'.\n\n"
+            f"--- BEGIN MASTER PLAN ---\n{lead_master_plan}\n--- END MASTER PLAN ---\n\n"
+            "There is NOTHING to read — the plan is above, in your context. "
+            "Use the master plan above directly."
+        )
+    else:
+        todo_payload = (
+            f"A brainstorming session ran but the lead synthesis failed. "
+            f"Read {out_file_abs} (use this absolute path verbatim) and "
+            "produce a master plan from the raw debate."
+        )
 
-    return ("__brainstorm__", synthesis_prompt, str(out_file_abs))
+    return ("__brainstorm__", todo_payload, str(out_file_abs))
 
 
 def _save_synthesis(state, out_file: str) -> None:
