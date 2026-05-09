@@ -10,7 +10,7 @@ from typing import Generator
 from tool_registry import get_tool_schemas
 from tools import execute_tool
 import tools as _tools_init  # ensure built-in tools are registered on import
-from providers import stream, AssistantTurn, TextChunk, ThinkingChunk, detect_provider
+from providers import stream, AssistantTurn, TextChunk, ThinkingChunk, detect_provider, nim_next_model
 from compaction import maybe_compact, estimate_tokens, get_context_limit, compact_messages, sanitize_history
 import logging_utils as _log
 import quota as _quota
@@ -144,6 +144,13 @@ def run(
             yield TextChunk(f"\n[Quota exceeded — {qe.reason}]\n")
             break
 
+        # NIM-only: when build.nvidia.com rate-limits a model, cycle to
+        # the next free-tier model before consuming a regular retry. Capped
+        # at _NIM_FALLBACK_LIMIT total swaps per turn so a fully-throttled
+        # tier can't cause a busy loop.
+        _nim_fallbacks_used = 0
+        _NIM_FALLBACK_LIMIT = 3
+
         # Stream from provider — retry on ANY error (never crash the session)
         max_retries = 3
         for attempt in range(max_retries + 1):
@@ -173,8 +180,33 @@ def run(
                 return  # circuit manages its own cooldown — don't retry
 
             except Exception as e:
-                from error_classifier import classify as _classify_err
+                from error_classifier import classify as _classify_err, ErrorCategory as _ErrCat
                 cerr = _classify_err(e)
+
+                # NIM 429 cascade: swap to the next free-tier model before
+                # spending a retry slot. Doesn't increment `attempt` so a
+                # transient global throttle still gets the regular backoff
+                # path after _NIM_FALLBACK_LIMIT swaps.
+                if (cerr.category == _ErrCat.RATE_LIMIT
+                        and detect_provider(config.get("model", "")) == "nim"
+                        and config.get("nim_auto_fallback", True)
+                        and _nim_fallbacks_used < _NIM_FALLBACK_LIMIT):
+                    _old = config["model"]
+                    _new = nim_next_model(_old)
+                    if _new and _new != _old:
+                        config = {**config, "model": _new}
+                        _nim_fallbacks_used += 1
+                        _log.warn("nim_fallback",
+                                   session_id=session_id,
+                                   from_model=_old, to_model=_new,
+                                   used=_nim_fallbacks_used,
+                                   limit=_NIM_FALLBACK_LIMIT)
+                        yield TextChunk(
+                            f"\n[NIM rate-limited on {_old} — switching to "
+                            f"{_new} ({_nim_fallbacks_used}/"
+                            f"{_NIM_FALLBACK_LIMIT})]\n"
+                        )
+                        continue   # retry without consuming attempt budget
 
                 if attempt >= max_retries or not cerr.retryable:
                     _log.error("api_failed", session_id=session_id,

@@ -19,6 +19,32 @@ from tools import _is_in_tg_turn, _is_in_web_turn
 
 # ── Brainstorm ─────────────────────────────────────────────────────────────
 
+
+def _parse_models_flag(args: str) -> tuple[list[str], str]:
+    """Pull `--models a,b,c` out of `args`, return (models, remaining_args).
+
+    Supports both `--models a,b,c` and `--models=a,b,c`. Models are not
+    validated here — providers.detect_provider does that lazily on first
+    use. The remaining args (with the flag stripped) become the topic.
+
+    Why this matters: a single-model brainstorm is an echo chamber — every
+    persona shares the same training data and blind spots. Letting each
+    persona run a different model (Claude critic + GPT optimist + DeepSeek
+    pragmatist) buys real epistemic diversity. Borrowed in spirit from
+    Dulus's RoundtableAgent (webchat_server.py).
+    """
+    import re as _re_models
+    out_models: list[str] = []
+    pattern = _re_models.compile(r"--models(?:=|\s+)([^\s]+)")
+    m = pattern.search(args)
+    if not m:
+        return [], args
+    raw = m.group(1)
+    out_models = [tok.strip() for tok in raw.split(",") if tok.strip()]
+    remaining = (args[:m.start()] + args[m.end():]).strip()
+    return out_models, remaining
+
+
 _TECH_PERSONAS = {
     "architect":   {"icon": "🏗️", "role": "Principal Software Architect",       "desc": "Focus on modularity, clear boundaries, patterns, and long-term maintainability."},
     "innovator":   {"icon": "💡", "role": "Pragmatic Product Innovator",          "desc": "Focus on bold, technically feasible ideas that add high user value and differentiation."},
@@ -81,7 +107,12 @@ def cmd_brainstorm(args: str, state, config) -> bool:
     claude_content = claude_md.read_text("utf-8", errors="replace") if claude_md.exists() else ""
     project_files = "\n".join([f.name for f in Path(".").glob("*") if f.is_file() and not f.name.startswith(".")])
 
-    user_topic = args.strip() or "general project improvement and architectural evolution"
+    # Pull the optional `--models a,b,c` flag out before treating the rest
+    # of args as the topic. When provided, each persona is assigned a model
+    # round-robin from the list, so a 5-persona session with two models
+    # alternates 1, 2, 1, 2, 1.
+    persona_models, args_remaining = _parse_models_flag(args)
+    user_topic = args_remaining.strip() or "general project improvement and architectural evolution"
 
     if _is_in_tg_turn(config) or _is_in_web_turn(config):
         agent_count = 5
@@ -130,10 +161,21 @@ USER FOCUS: {user_topic}
     out_file = outputs_dir / f"brainstorm_{ts}.md"
 
     brainstorm_history = []
-    ok(f"Starting {agent_count}-Agent Brainstorming Session on: {clr(user_topic, 'bold')}")
+    if persona_models:
+        ok(f"Starting {agent_count}-Agent Brainstorming Session on: {clr(user_topic, 'bold')}")
+        info(clr(f"Multi-model debate across: {', '.join(persona_models)}", "dim"))
+    else:
+        ok(f"Starting {agent_count}-Agent Brainstorming Session on: {clr(user_topic, 'bold')}")
     info(clr("Generating diverse perspectives...", "dim"))
 
-    def call_persona(persona_name, p_data, history):
+    def _model_for_index(i: int) -> str:
+        """Round-robin model assignment across personas. Falls back to the
+        session's current model when no `--models` was given."""
+        if persona_models:
+            return persona_models[i % len(persona_models)]
+        return curr_model
+
+    def call_persona(persona_name, p_data, history, persona_model: str):
         letter, name = get_identity(persona_name[0].upper())
         system_prompt = f"""You are {name}, the {p_data['role']}. Identity: Agent {letter}.
 {p_data['desc']}
@@ -155,25 +197,40 @@ INSTRUCTIONS:
         internal_config = config.copy()
         internal_config["no_tools"] = True
         try:
-            for event in stream(curr_model, system_prompt, [{"role": "user", "content": user_msg}], [], internal_config):
+            for event in stream(persona_model, system_prompt, [{"role": "user", "content": user_msg}], [], internal_config):
                 if isinstance(event, TextChunk):
                     full_response.append(event.text)
         except Exception as e:
-            return f"Error from Agent {letter}: {e}"
+            return f"Error from Agent {letter} (model {persona_model}): {e}"
         return "".join(full_response).strip()
 
-    full_log = [f"# Brainstorming Session: {user_topic}", f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}", f"**Model:** {curr_model}", "---"]
+    if persona_models:
+        _model_summary = ", ".join(persona_models)
+    else:
+        _model_summary = curr_model
+    full_log = [
+        f"# Brainstorming Session: {user_topic}",
+        f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"**Models:** {_model_summary}",
+        "---",
+    ]
 
-    for p_name, p_data in personas.items():
+    for i, (p_name, p_data) in enumerate(personas.items()):
         icon = p_data.get("icon", "🤖")
-        info(f"{icon} {clr(p_data['role'], 'yellow')} is thinking...")
+        p_model = _model_for_index(i)
+        if persona_models:
+            info(f"{icon} {clr(p_data['role'], 'yellow')} ({clr(p_model, 'dim')}) is thinking...")
+        else:
+            info(f"{icon} {clr(p_data['role'], 'yellow')} is thinking...")
         _start_tool_spinner()
         hist_text = "\n\n".join(brainstorm_history) if brainstorm_history else ""
-        content = call_persona(p_name, p_data, hist_text)
+        content = call_persona(p_name, p_data, hist_text, p_model)
         _stop_tool_spinner()
         if content:
             brainstorm_history.append(content)
-            full_log.append(f"## {icon} {p_data['role']}\n{content}")
+            # Tag each persona section with its model so the synthesizer
+            # can weight by source diversity rather than raw count.
+            full_log.append(f"## {icon} {p_data['role']} _(via {p_model})_\n{content}")
             print(clr("  └─ Perspective captured.", "dim"))
         else:
             err(f"  └─ Failed to capture {p_name} perspective.")

@@ -141,6 +141,32 @@ PROVIDERS: dict[str, dict] = {
         "context_limit": 128000,
         "models": [],
     },
+    # NVIDIA NIM (build.nvidia.com) — free tier, no payment info required.
+    # OpenAI-compatible. Get a key at https://build.nvidia.com (free signup).
+    # Model IDs use the upstream <vendor>/<name> form, so callers must use
+    # the double-prefixed `nim/<vendor>/<model>` invocation, e.g.
+    #   cheetahclaws --model nim/meta/llama-3.3-70b-instruct
+    # The catalog evolves — this list is a curated 2026-vintage starting set;
+    # any model the catalog still serves works regardless of presence here.
+    "nim": {
+        "type":       "openai",
+        "api_key_env": "NVIDIA_API_KEY",
+        "base_url":   "https://integrate.api.nvidia.com/v1",
+        "context_limit": 128000,
+        "max_completion_tokens": 16384,
+        "models": [
+            "deepseek-ai/deepseek-r1",
+            "deepseek-ai/deepseek-v3.1",
+            "meta/llama-3.3-70b-instruct",
+            "meta/llama-3.1-405b-instruct",
+            "nvidia/llama-3.1-nemotron-70b-instruct",
+            "mistralai/mixtral-8x22b-instruct-v0.1",
+            "qwen/qwen2.5-72b-instruct",
+            "qwen/qwen2.5-coder-32b-instruct",
+            "microsoft/phi-3-medium-128k-instruct",
+            "google/gemma-2-27b-it",
+        ],
+    },
 }
 
 # Cost per million tokens (approximate, fallback to 0 for unknown)
@@ -168,6 +194,19 @@ COSTS = {
     "MiniMax-Text-01":          (0.7,   2.1),
     "abab6.5s-chat":            (0.1,   0.1),
     "abab6.5-chat":             (0.5,   0.5),
+    # NVIDIA NIM — free tier (no per-token billing on build.nvidia.com).
+    # Listed for completeness so cost displays show $0 instead of "unknown".
+    # If NVIDIA later monetises a tier, update only the affected rows.
+    "deepseek-ai/deepseek-r1":                   (0.0, 0.0),
+    "deepseek-ai/deepseek-v3.1":                 (0.0, 0.0),
+    "meta/llama-3.3-70b-instruct":               (0.0, 0.0),
+    "meta/llama-3.1-405b-instruct":              (0.0, 0.0),
+    "nvidia/llama-3.1-nemotron-70b-instruct":    (0.0, 0.0),
+    "mistralai/mixtral-8x22b-instruct-v0.1":     (0.0, 0.0),
+    "qwen/qwen2.5-72b-instruct":                 (0.0, 0.0),
+    "qwen/qwen2.5-coder-32b-instruct":           (0.0, 0.0),
+    "microsoft/phi-3-medium-128k-instruct":      (0.0, 0.0),
+    "google/gemma-2-27b-it":                     (0.0, 0.0),
 }
 
 # Auto-detection: prefix → provider name
@@ -207,6 +246,31 @@ def detect_provider(model: str) -> str:
 def bare_model(model: str) -> str:
     """Strip 'provider/' prefix if present."""
     return model.split("/", 1)[1] if "/" in model else model
+
+
+def nim_next_model(current: str) -> str | None:
+    """Return the next NIM model after `current` in the curated chain, or None.
+
+    Used by the agent loop's 429 cascade: when one NIM model is rate-limited,
+    try the next one. Wraps around to the first model after the last so a
+    long-running session can keep cycling, but the agent's per-turn fallback
+    counter caps total attempts to prevent a busy loop when the whole tier
+    is throttled.
+
+    Accepts either bare ('meta/llama-3.3-70b-instruct') or fully prefixed
+    ('nim/meta/llama-3.3-70b-instruct') input; returns the same form as input.
+    """
+    had_nim_prefix = current.startswith("nim/")
+    bare = current[4:] if had_nim_prefix else current
+    chain = PROVIDERS["nim"]["models"]
+    if bare not in chain:
+        # Unknown model — start from the head so user-supplied IDs at least
+        # cycle into a known-good chain on the first 429.
+        nxt = chain[0]
+    else:
+        idx = chain.index(bare)
+        nxt = chain[(idx + 1) % len(chain)]
+    return f"nim/{nxt}" if had_nim_prefix else nxt
 
 
 # ── Auto max_tokens cap ────────────────────────────────────────────────────
