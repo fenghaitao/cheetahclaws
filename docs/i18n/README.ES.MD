@@ -1,10 +1,10 @@
-Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.CN.MD) | [Français](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.FR.MD) | [한국어](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.KO.MD) | [日本語](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.JP.MD) | [Deutsch](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.DE.MD) | [Português](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.ES.MD)
+Español | [中文](README.CN.MD) | [Français](README.FR.MD) | [한국어](README.KO.MD) | [日本語](README.JP.MD) | [Deutsch](README.DE.MD) | [Português](README.ES.MD)
 
 <br>
 
 <div align="center">
-  <a href="[https://github.com/SafeRL-Lab/Robust-Gymnasium](https://github.com/SafeRL-Lab/clawspring)">
-    <img src="docs/logo-5.png" alt="Logo" width="280"> 
+  <a href="[https://github.com/SafeRL-Lab/Robust-Gymnasium](https://github.com/SafeRL-Lab/cheetahclaws)">
+    <img src="../media/logos/logo-5.png" alt="Logo" width="280"> 
   </a>
 
 
@@ -12,15 +12,15 @@ Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READ
 <p align="center">
     <a href="https://github.com/chauncygu/collection-claude-code-source-code">La fuente más reciente de Claude Code</a>
     ·
-    <a href="https://github.com/SafeRL-Lab/clawspring/issues">Issues</a>
+    <a href="https://github.com/SafeRL-Lab/cheetahclaws/issues">Issues</a>
   ·
-    <a href="https://deepwiki.com/SafeRL-Lab/clawspring">Introducción breve</a>
+    <a href="https://deepwiki.com/SafeRL-Lab/cheetahclaws">Introducción breve</a>
 
   </p>
 </div>
 
  <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/demo.gif" width="850"/> 
+ <img src="../media/demos/demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Ejecución de tareas</center>
@@ -30,7 +30,7 @@ Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READ
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/brainstorm_demo.gif" width="850"/> 
+ <img src="../media/demos/brainstorm_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Modo Brainstorm: lluvia de ideas multiagente</center>
@@ -41,7 +41,7 @@ Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READ
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/proactive_demo.gif" width="850"/> 
+ <img src="../media/demos/proactive_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Modo proactivo: agente autónomo</center>
@@ -50,7 +50,7 @@ Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READ
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/ssj_demo.gif" width="850"/> 
+ <img src="../media/demos/ssj_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Modo de desarrollador SSJ: flujo de trabajo con menú avanzado</center>
@@ -59,7 +59,7 @@ Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READ
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/telegram_demo.gif" width="850"/> 
+ <img src="../media/demos/telegram_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Puente de Telegram: controla cheetahclaws desde tu teléfono</center>
@@ -103,7 +103,7 @@ Español | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READ
   - Toda la documentación, URLs de GitHub y referencias internas se actualizaron en consecuencia.
   - Se añadió una sección de comparación **CheetahClaws vs OpenClaw** al README.
 
-Para más novedades, consulta [aquí](https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/news.md)
+Para más novedades, consulta [aquí](../news.md)
 
 
 ---
@@ -157,7 +157,7 @@ CheetahClaws: una reimplementación en Python de Claude Code, **ligera** y **fá
 
 Claude Code es un potente asistente de programación con IA listo para producción, pero su código fuente es un paquete compilado de TypeScript/Node.js de 12 MB (~1,300 archivos, ~283K líneas). Está fuertemente acoplado a la API de Anthropic, es difícil de modificar y es imposible ejecutarlo contra un modelo local o alternativo.
 
-**CheetahClaws** reimplementa el mismo bucle central en ~10K líneas de Python legible, conservando todo lo que necesitas y eliminando lo que no. Consulta aquí un análisis más detallado (CheetahClaws v3.03), [versión en inglés](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/comparison_claude_code_vs_nano_v3.03_en.md) y [versión en chino](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/comparison_claude_code_vs_nano_v3.03_cn.md)
+**CheetahClaws** reimplementa el mismo bucle central en ~10K líneas de Python legible, conservando todo lo que necesitas y eliminando lo que no. Consulta aquí un análisis más detallado (CheetahClaws v3.03), [versión en inglés](../comparison_claude_code_vs_nano_v3.03_en.md) y [versión en chino](../comparison_claude_code_vs_nano_v3.03_cn.md)
 
 ### De un vistazo
 
@@ -406,7 +406,7 @@ Claude Code es un potente asistente de programación con IA listo para producci�
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clona e instala
-git clone https://github.com/SafeRL-Lab/clawspring
+git clone https://github.com/SafeRL-Lab/cheetahclaws
 cd cheetahclaws
 uv tool install .
 ```
@@ -434,7 +434,7 @@ uv tool uninstall cheetahclaws
 ### Alternativa: ejecutar directamente desde el repositorio
 
 ```bash
-git clone https://github.com/SafeRL-Lab/clawspring
+git clone https://github.com/SafeRL-Lab/cheetahclaws
 cd cheetahclaws
 
 pip install -r requirements.txt
@@ -1672,7 +1672,7 @@ Generando perspectivas diversas...
 `/ssj` abre un menú persistente avanzado: un único punto de entrada para los flujos de trabajo de desarrollo más comunes, para que no tengas que recordar nombres de comandos.
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/ssj_demo.gif" width="850"/>
+<img src="../media/demos/ssj_demo.gif" width="850"/>
 </div>
 
 ### Opciones del menú
@@ -1807,7 +1807,7 @@ La opción 4 de SSJ ejecuta un debate estructurado de varias rondas entre expert
 `/telegram` convierte cheetahclaws en un bot de Telegram: recibe mensajes desde tu teléfono, ejecuta el modelo con acceso completo a herramientas y responde automáticamente.
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/telegram_demo.gif" width="850"/>
+<img src="../media/demos/telegram_demo.gif" width="850"/>
 </div>
 
 ### Configuración (una sola vez)

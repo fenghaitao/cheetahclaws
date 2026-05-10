@@ -3,7 +3,7 @@
 ## Memory
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/memory_demo.gif" width="850"/>
+<img src="../media/demos/memory_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Memory: save preferences in session 1 → auto-recalled in session 2, no re-explanation needed</center>
@@ -191,7 +191,7 @@ AI: [deploys version 2.1.0 to staging]
 ## Sub-Agents
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/subagent_demo.gif" width="850"/>
+<img src="../media/demos/subagent_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Sub-Agents: spawn coder + security agents in parallel, merge results automatically</center>

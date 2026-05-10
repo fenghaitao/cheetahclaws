@@ -5,7 +5,7 @@
 `/telegram` turns cheetahclaws into a Telegram bot — receive messages from your phone, run the model with full tool access, and reply automatically.
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/telegram_demo.gif" width="850"/>
+<img src="../media/demos/telegram_demo.gif" width="850"/>
 </div>
 
 ### Setup (one-time)
@@ -188,7 +188,7 @@ The bridge also auto-starts in **web-server mode** (`cheetahclaws --web`) — ha
 ## WeChat Bridge
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/wechat_demo.gif" width="850"/>
+<img src="../media/demos/wechat_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">WeChat Bridge: Control cheetahclaws from WeChat (微信)</center>
@@ -398,7 +398,7 @@ stdout, you copy/paste into your IM client of choice.
 ## Slack Bridge
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/slack_demo.gif" width="850"/>
+<img src="../media/demos/slack_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Slack Bridge: Control cheetahclaws from Slack</center>

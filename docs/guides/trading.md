@@ -1,7 +1,7 @@
 # Trading Agent
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/trading_demo.gif" width="850"/>
+<img src="../media/demos/trading_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Trading Agent: SSJ → multi-agent analysis (Bull/Bear debate + Risk panel + PM decision) → backtest → indicators</center>

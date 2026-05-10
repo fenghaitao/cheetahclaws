@@ -1,10 +1,10 @@
-English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.CN.MD) | [한국어](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.KO.MD) | [日本語](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.JP.MD) | [Français](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.FR.MD) | [Deutsch](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/README.DE.MD) | [Español](https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/README.ES.MD) | [Português](https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/README.PT.MD)
+English | [中文](docs/i18n/README.CN.MD) | [한국어](docs/i18n/README.KO.MD) | [日本語](docs/i18n/README.JP.MD) | [Français](docs/i18n/README.FR.MD) | [Deutsch](docs/i18n/README.DE.MD) | [Español](docs/i18n/README.ES.MD) | [Português](docs/i18n/README.PT.MD)
 
 <br> 
 
 <div align="center">
-  <a href="[https://github.com/SafeRL-Lab/Robust-Gymnasium](https://github.com/SafeRL-Lab/clawspring)">
-    <img src="docs/logo-5.png" alt="Logo" width="280"> 
+  <a href="[https://github.com/SafeRL-Lab/Robust-Gymnasium](https://github.com/SafeRL-Lab/cheetahclaws)">
+    <img src="docs/media/logos/logo-5.png" alt="Logo" width="280"> 
   </a>
 
   
@@ -14,7 +14,7 @@ English | [中文](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/READM
     ·
     <a href="https://deepwiki.com/SafeRL-Lab/cheetahclaws">Brief Intro</a>
     ·
-    <a href="https://github.com/SafeRL-Lab/clawspring/issues">Issue</a>
+    <a href="https://github.com/SafeRL-Lab/cheetahclaws/issues">Issue</a>
     ·
     <a href="https://github.com/chauncygu/collection-claude-code-source-code">The newest source of Claude Code</a>
     
@@ -43,9 +43,9 @@ Other install methods: [pip install](#alternative-install-with-pip) | [uv instal
 
  
 - May 10, 2026 (latest, **v3.05.79**): **Web Chat UI session organization (folders, drag-drop, ChatGPT-style active-folder context, batch select + export, resizable sidebar) + headless-bridges slash handler (#84 follow-up: Telegram/Slack/WeChat /help/monitor/model/status now respond in Docker/--web) + stale-session reaper crash fix + #111 slash duplicate fix + --web --model persistence. Details: [docs/news.md](docs/news.md).**
-- May 10, 2026: **Web Chat UI fixes — slash commands no longer reply twice; `--web --model X` actually applies the model.** Two related issues that surfaced when wiring a self-hosted vLLM endpoint into the Chat UI. (1) **Issue #111 — slash commands duplicated in Chat UI but not in terminal.** `web/api.py:handle_slash_sync` was both returning events inline in the HTTP response **and** broadcasting the same events to the WS subscribers of the same client; `chat.js` then iterated `data.events` AND fired `_handleEvent` from `ws.onmessage`, rendering every reply twice. Same bug in `handle_slash_stream` for SSE-streamed long commands (`/brainstorm`, `/worker`, `/agent`, `/plan`). Both helpers now deliver events through a single channel — HTTP/SSE only — so `_handleEvent` runs exactly once per event. Background-thread events (sentinel flows, agent runs) are unaffected: by the time the worker thread emits, `_broadcast` is already restored to the live WS broadcaster in `finally`. (2) **`--web --model X` was silently ignored.** The CLI override branch only ran in the interactive-REPL path; the `if args.web:` branch loaded config straight from disk and started the server, so `python cheetahclaws.py --web --model custom/qwen2.5-72b` would happily boot but every request handler reloaded `~/.cheetahclaws/config.json` with the previous model name (e.g. `gemma-4-31B-it`), producing a confusing `404: model does not exist` against the new endpoint. Fix: `cheetahclaws.py` now persists `args.model` to config before calling `start_web_server`, matching the documented behavior; `provider:model` → `provider/model` normalization is identical to the REPL path. User-side guide: [`docs/guides/web-ui.md`](docs/guides/web-ui.md) (Troubleshooting + Architecture notes updated).
-- May 10, 2026: **Small-context local models survive large workloads — 4-part fix: ctx cap, auto-fanout, stagnation-stop, output paths under `~/.cheetahclaws/`.** Repro that motivated the work: running `/agent → 1 (Research Assistant)` on a 6.6 MB PDF (`AutoRedTeamer.pdf` — ~70k tokens of extracted text) with `custom/qwen2.5-72b` (32k ctx). Old behavior: 400 BadRequest "context length 32768"; the agent_runner kept polling the template every 2 s; the model produced **1500+ identical "task complete" summaries** before anything stopped it. New behavior, four cooperating layers: (1) **Per-model context-window registry + dynamic max_tokens cap** (`providers._MODEL_CONTEXT_LIMITS` + `get_model_context_window` + `dynamic_cap_max_tokens`) — covers Qwen 2.5/3, Llama 3.x, Mistral/Mixtral, Phi, Gemma, DeepSeek local variants; `_fetch_custom_model_limit` now backfills `PROVIDERS["custom"]["context_limit"]` so compaction sees the live `/v1/models` value; per-call shrink based on actual prompt size keeps `input + output + 1024 safety ≤ ctx`. `compaction.get_context_limit` gains an optional `config` arg so custom-endpoint detection works on the very first turn. (2) **Auto-fanout for oversize tool outputs** (`multi_agent/fanout.py`) — when a single tool result (Read on a huge PDF, Grep over a giant tree, WebFetch of a long article) exceeds 0.4 × ctx_window, split into chunks at paragraph boundaries with token-overlap, dispatch parallel sub-LLM map calls (one per chunk, default cap 5 subagents), merge with a single reduce call; substitutes the merged summary in conversation history instead of letting the next API call overflow. Hooked at the tool-result append site in `agent.py`; transparent UX prints `[Auto-fanout: <Tool> returned ~N chars (>threshold) → dispatching K parallel sub-summaries]`. Configurable: `auto_fanout_enabled` / `_threshold` / `_max_subagents` / `_chunk_overlap_tokens`. (3) **Stagnation-stop in `agent_runner.py`** — when the model emits the same summary N iterations in a row (default 3, whitespace/case-normalized), stop the loop with a clear notification instead of burning thousands of API calls; configurable via `auto_agent_dup_summary_limit` (0 disables). (4) **Agent output paths under `~/.cheetahclaws/`** — `/agent` wizard now resolves relative output filenames (e.g. `research_notes.md`) to absolute paths under `~/.cheetahclaws/agents/<name>/output/` instead of CWD; `AgentRunner` exposes `runner.output_dir`, eagerly mkdir'd; Summary block + post-start info show the resolved path in green; absolute paths pass through unchanged. **Tests:** +47 new (fanout 23, ctx cap 18, dup-stop 13, output paths 8). **Full suite: 2139 passing, zero regressions.** User-side guide: [`docs/guides/extensions.md`](docs/guides/extensions.md).
-- May 9, 2026: **`fix/agentic-on-every-model` branch — make every model produce useful work, and make `/brainstorm` an actual debate.** A single coordinated branch (9 commits, 269 new tests, zero regressions) that lands on weak / non-Claude models specifically. **Prompts:** new `prompts/overlays/qwen.md` overlay for qwen / qwq families plus an explore-first section in `default.md` so any model walks a directory before asking the user to name a file. **Runtime:** `agent.py` auto-nudge (one-shot, when user message contains an absolute path but the model replies text-only); read-only tool dedup (Read/Glob/Grep/WebFetch/WebSearch with identical args within a turn → 2nd call short-circuited, model gets a `[deduped]` reminder); KeyError-on-empty-args hardening in tool dispatch (`Write({}) → KeyError: 'file_path'` is now a friendly "missing required parameter" error the model can self-correct from). **Providers:** new `nim` provider (build.nvidia.com free tier, 10-model curated chain) invoked as `nim/<vendor>/<model>`, with 429 cascade fallback (cap 3 swaps/turn, gated to NIM only). **`/brainstorm` overhaul:** real lead moderator (`--lead <model>`) does opening (sets agenda + bans filler) → personas debate in N rounds (`--rounds N`, default 2) → lead probes after each round → lead synthesizes a structured master plan inline (no main-agent Read needed); round 2+ is **adversarial cross-examination** — every persona MUST quote another agent's claim and attack it with a falsifiable counter, "agree-and-extend" is forbidden, lead probes any dodge. New `--models a,b,c` flag distributes different models per persona for epistemic diversity. **`/monitor` + `/research` stability:** `/subscribe` no longer truncates multi-word topics ("Agent OS Benchmark" used to become "Agent"); aggregator no longer deadlocks on a hung source after `as_completed` timeout; REPL Ctrl+C during a slow slash command cancels just that command instead of killing the whole process. Branch: `fix/agentic-on-every-model`. User-side guide: [`docs/guides/brainstorm.md`](docs/guides/brainstorm.md).
+- May 10, 2026: **Web Chat UI fixes — slash commands no longer reply twice; `--web --model X` actually applies the model (#111).** Details: [docs/news.md](docs/news.md).
+- May 10, 2026: **Small-context local models survive large workloads — 4-part fix: ctx cap, auto-fanout, stagnation-stop, output paths under `~/.cheetahclaws/`.** Details: [docs/news.md](docs/news.md).
+- May 9, 2026: **`fix/agentic-on-every-model` branch — make every model produce useful work + make `/brainstorm` an actual adversarial debate (9 commits, 269 new tests).** Details: [docs/news.md](docs/news.md).
 - May 8, 2026: **Agent-OS layer (`cc_kernel/`) reaches v1.0 — 27 RFCs shipped, 1771 tests passing, zero regressions on the legacy REPL/bridges path.** 
 - May 8, 2026: **F-2/F-3 follow-ups + CI unblock (`feature/fix-f2`).**
 - May 8, 2026 (**v3.05.78**): **Research lab Phase A — autonomous multi-day research; WeChat smart-reply + `/draft` semi-auto reply; reliability + UX hardening across the lab pipeline.**
@@ -53,7 +53,7 @@ Other install methods: [pip install](#alternative-install-with-pip) | [uv instal
 - May 5, 2026: **Telegram bridge file round-trip + cross-channel pickable permission prompts (#84)**
 - May 3, 2026: **Research Lab — autonomous multi-agent paper writing with sandboxed experiments + web UI.** 
 - May 2, 2026: **Daemon foundation lands (#80) — `cheetahclaws serve` + `cheetahclaws daemon {status, stop, logs, rotate-token}`** are real. 
-- May 2, 2026: **Docker chat UI assets 404 follow-up (#73) — `web/server.py` now resolves `_WEB_DIR` via `importlib.resources.files("web")` instead of `Path(__file__).parent`, so static files are found whether the package is installed editable or non-editable. The dotfile guard in the static-file branch now only inspects path segments inside `_WEB_DIR`, so installs sitting under `.venv/`, `.local/`, etc. no longer 404 every asset. `[tool.setuptools.package-data]` for `web` widened to `static/**/*` so non-editable wheels reliably ship the full `web/static/` subtree. Plus a new `docs/guides/docker.md` "Custom Dockerfile pitfalls" section covering the editable-install requirement and the most common 404 root cause for users rolling their own image.**
+- May 2, 2026: **Docker chat UI assets 404 follow-up (#73) — `_WEB_DIR` resolves via `importlib.resources.files("web")` so editable & non-editable installs both find static files; package-data widened to ship full `web/static/` subtree.** Details: [docs/news.md](docs/news.md).
 - Apr 30, 2026: **Docker / home-server support (#73)**
 - Apr 24, 2026: **Support Deepseek V4 models, multi-model prompt adaptation**
 - Apr 20, 2026 (**v3.05.76**): **Research pipeline — 20 sources across academia/tech/finance/social/web + cross-platform attention heat table, publication trend sparkline, notable-citer analysis, entity extraction, multi-query expansion, side-by-side compare, saved reports, weekly trend tracking via `/monitor`, one-click `/ssj` wizard. Also including Chinese platforms: Zhihu (知乎) · Bilibili (B站) · Weibo (微博) · Rednote (小红书).**
@@ -61,7 +61,7 @@ Other install methods: [pip install](#alternative-install-with-pip) | [uv instal
 - Apr 16, 2026 (**v3.05.74**): **Web UI production hardening — persistence, multi-user auth, ops endpoints, JS module split, pytest suite**
   
  
-For more news, see [here](https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/news.md)
+For more news, see [here](docs/news.md)
 
 
 ---
@@ -91,7 +91,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 
 ### Demos
  <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/demo.gif" width="850"/> 
+ <img src="docs/media/demos/demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Task Excution</center>
@@ -101,7 +101,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/web_demo.gif" width="850"/> 
+ <img src="docs/media/demos/web_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Web UI: Browser Chat — Sidebar, Tool Cards, Approval Prompts, Markdown Streaming</center>
@@ -112,7 +112,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/brainstorm_demo.gif" width="850"/> 
+ <img src="docs/media/demos/brainstorm_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Brainstorm Mode: Multi-Agent Brainstorm</center>
@@ -123,7 +123,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/proactive_demo.gif" width="850"/> 
+ <img src="docs/media/demos/proactive_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Proactive Mode: Autonomous Agent</center>
@@ -132,7 +132,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/ssj_demo.gif" width="850"/> 
+ <img src="docs/media/demos/ssj_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">SSJ Mode (Simple and Smart Job Mode): Power Menu Workflow</center>
@@ -141,7 +141,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/telegram_demo.gif" width="850"/> 
+ <img src="docs/media/demos/telegram_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Telegram Bridge: Control cheetahclaws from Your Phone</center>
@@ -150,7 +150,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/wechat_demo.gif" width="850"/> 
+ <img src="docs/media/demos/wechat_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">WeChat Bridge: Control cheetahclaws from WeChat (微信)</center>
@@ -159,7 +159,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
   <div align=center>
- <img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/slack_demo.gif" width="850"/> 
+ <img src="docs/media/demos/slack_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Slack Bridge: Control cheetahclaws from Slack</center>
@@ -168,7 +168,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 ---
 
  <div align=center>
- <img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/trading_demo.gif" width="850"/> 
+ <img src="docs/media/demos/trading_demo.gif" width="850"/> 
  </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Autonomous Trading Agent</center>
@@ -181,7 +181,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 
 Claude Code is a powerful, production-grade AI coding assistant — but its source code is a compiled, 12 MB TypeScript/Node.js bundle (~1,300 files, ~283K lines). It is tightly coupled to the Anthropic API, hard to modify, and impossible to run against a local or alternative model.
 
-**CheetahClaws** reimplements the same core loop in ~40K lines of readable Python, keeping everything you need and dropping what you don't. See here for more detailed analysis (CheetahClaws v3.03), [English version](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/comparison_claude_code_vs_nano_v3.03_en.md) and [Chinese version](https://github.com/SafeRL-Lab/clawspring/blob/main/docs/comparison_claude_code_vs_nano_v3.03_cn.md)
+**CheetahClaws** reimplements the same core loop in ~40K lines of readable Python, keeping everything you need and dropping what you don't. See here for more detailed analysis (CheetahClaws v3.03), [English version](docs/comparison_claude_code_vs_nano_v3.03_en.md) and [Chinese version](docs/comparison_claude_code_vs_nano_v3.03_cn.md)
 
 ### At a glance
 

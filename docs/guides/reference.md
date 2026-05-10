@@ -160,7 +160,7 @@ Type `/` and press **Tab** to see all commands with descriptions. Continue typin
 **Switching models inside a session:**
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/multimodel_demo.gif" width="850"/>
+<img src="../media/demos/multimodel_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Multi-Model Switching: Claude → GPT-4o → Ollama → back, full history preserved</center>

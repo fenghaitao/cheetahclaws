@@ -69,7 +69,7 @@ Generating diverse perspectives...
 `/ssj` opens a persistent interactive power menu — a single entry point for the most common development workflows, so you never have to remember command names.
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/clawspring/blob/main/docs/ssj_demo.gif" width="850"/>
+<img src="../media/demos/ssj_demo.gif" width="850"/>
 </div>
 
 ### Menu options
@@ -146,7 +146,7 @@ Any `/command` typed at the `⚡ SSJ »` prompt is passed through to the REPL:
 ### Worker command
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/worker_demo.gif" width="850"/>
+<img src="../media/demos/worker_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">/worker: brainstorm → 5-task queue → auto-implement each with progress bar</center>
@@ -218,7 +218,7 @@ SSJ option 4 runs a structured multi-round expert debate on any file:
 ## Tmux Integration
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/tmux_demo.gif" width="850"/>
+<img src="../media/demos/tmux_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Tmux Integration: AI splits panes, sends commands, captures output across sessions</center>
@@ -288,7 +288,7 @@ The AI calls `TmuxNewSession(detached=true)` then sends the vLLM launch command 
 ## Shell Escape
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/shell_escape_demo.gif" width="850"/>
+<img src="../media/demos/shell_escape_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Shell Escape: ! prefix runs commands directly — git, ls, python, pipes — no AI involvement</center>
@@ -370,7 +370,7 @@ Duration suffix: `s` = seconds, `m` = minutes, `h` = hours. Plain integer = seco
 ## Checkpoint System
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/checkpoint_demo.gif" width="850"/>
+<img src="../media/demos/checkpoint_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Checkpoint / Rewind: AI breaks tests → /checkpoint list → rewind → files restored</center>
@@ -416,7 +416,7 @@ CheetahClaws automatically snapshots your conversation and any edited files afte
 ## Plan Mode
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/plan_demo.gif" width="850"/>
+<img src="../media/demos/plan_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Plan Mode: Read-only analysis → write plan → /plan done → implement</center>
@@ -681,7 +681,7 @@ Resume a specific file:
 ## Cloud Sync (GitHub Gist)
 
 <div align=center>
-<img src="https://github.com/SafeRL-Lab/cheetahclaws/blob/main/docs/cloudsave_demo.gif" width="850"/>
+<img src="../media/demos/cloudsave_demo.gif" width="850"/>
 </div>
 <div align=center>
 <center style="color:#000000;text-decoration:underline">Cloud Sync: /cloudsave on desktop → encrypted upload → /cloudload on laptop → full session restored</center>
