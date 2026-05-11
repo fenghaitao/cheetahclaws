@@ -100,6 +100,7 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 
 <br/>
 
+<!--
 <div align="center">
 <img src="docs/media/casts/research.svg" width="900" alt="CheetahClaws /research 20-source pipeline"/>
 </div>
@@ -138,6 +139,8 @@ CheetahClaws: **A Lightweight** and **Easy-to-Use** Python Reimplementation of C
 > **Tip:** the recordings are animated SVGs at [`docs/media/casts/`](docs/media/casts/). Source `.cast` files (asciinema v2) live next to them — replay locally with `asciinema play <file>.cast` or re-render with `svg-term --in <file>.cast --out <file>.svg`.
 
 ---
+
+-->
 
  <div align=center>
  <img src="docs/media/demos/demo.gif" width="850"/> 
