@@ -94,6 +94,54 @@ In-app form (persists across launches):
 context window, so you don't need to hard-code `context_limit` in
 `providers.py` — `--max-model-len` on the server is the source of truth.
 
+### Alternative: cloud providers with non-trivial auth via the `litellm/` provider
+
+Use this when the upstream needs auth that's painful to wire by hand —
+**AWS Bedrock SigV4 signing**, **Azure OpenAI deployment routing**, or
+**Google Vertex AI service-account JWTs**. For plain OpenAI-shaped
+endpoints (vLLM, LM Studio, TGI, Together, Fireworks, …) prefer the
+`custom/` provider above; it adds no dependency.
+
+```bash
+pip install cheetahclaws[litellm]
+
+# Bedrock — uses your boto3 credential chain (AWS_PROFILE, ~/.aws/credentials,
+# IAM role on EC2). No api_key needed.
+export AWS_REGION=us-east-1
+cheetahclaws --model litellm/bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+
+# Azure OpenAI — deployment-id routing via the api_base + api_version pair.
+export AZURE_API_KEY=...
+export AZURE_API_BASE=https://my-resource.openai.azure.com
+export AZURE_API_VERSION=2024-10-01-preview
+cheetahclaws --model litellm/azure/my-gpt4o-deployment
+
+# Vertex AI — Google Application Default Credentials.
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+export VERTEXAI_PROJECT=my-project
+export VERTEXAI_LOCATION=us-central1
+cheetahclaws --model litellm/vertex_ai/gemini-2.0-flash
+```
+
+The model string format is **`litellm/<provider>/<model>`** — the first
+segment selects this adapter, everything after is passed verbatim to
+`litellm.completion(model=...)`. See https://docs.litellm.ai/docs/providers
+for the full list of 100+ supported providers.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `litellm SDK not installed` | Extra not selected at install time | `pip install cheetahclaws[litellm]` |
+| `400 …unsupported param…` | Model rejected a kwarg (e.g. `temperature` on o1) | Adapter already passes `drop_params=True`; double-check the kwarg name |
+| `metadata.cost_unknown: True` on responses | litellm has no price entry for that model | Cost ledger records `cost_micro=0`; tokens still count. Either upgrade litellm or accept the unknown |
+| 401 on Bedrock | Wrong region or no IAM permission | Confirm `AWS_REGION` matches the model's region; check `bedrock:InvokeModel` on the principal |
+| 403 on Azure | `api_version` too old for the deployment | Bump `AZURE_API_VERSION` to a version listed on the deployment's page |
+
+**When to prefer `custom/` over `litellm/`:** if your endpoint speaks
+plain OpenAI Chat Completions and accepts a bearer token (vLLM, LM
+Studio, TGI, Together, Fireworks, Groq, OpenRouter, …), `custom/` is
+zero-dependency and zero-config beyond `CUSTOM_BASE_URL`. Reach for
+`litellm/` only when the auth gymnastics above are the actual blocker.
+
 ---
 
 ## 2. Remote Control via Telegram
