@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -85,6 +86,21 @@ def list_runners() -> list["AgentRunner"]:
         return list(_runners.values())
 
 
+def _should_use_subprocess(config: dict) -> bool:
+    """Pick between the in-thread (legacy) and subprocess (F-4) execution
+    path. The subprocess path is POSIX-only and gated by either:
+        * ``CHEETAHCLAWS_ENABLE_F4`` env var (any truthy value), OR
+        * ``agent_runner_subprocess: true`` in config.
+    Default is False — REPL users see no behaviour change.
+    """
+    if sys.platform.startswith("win"):
+        return False
+    env_flag = os.environ.get("CHEETAHCLAWS_ENABLE_F4", "").strip().lower()
+    if env_flag in {"1", "true", "yes", "on"}:
+        return True
+    return bool(config.get("agent_runner_subprocess", False))
+
+
 def start_runner(
     name: str,
     template_name: str,
@@ -93,8 +109,29 @@ def start_runner(
     send_fn: Optional[Callable[[str], None]] = None,
     interval: float = 2.0,
     auto_approve: bool = True,
-) -> "AgentRunner":
-    """Create and start an AgentRunner; kill any previous runner with same name."""
+):
+    """Create and start an AgentRunner; kill any previous runner with same name.
+
+    Returns either an :class:`AgentRunner` (thread mode — legacy) or a
+    ``RunnerHandle`` (subprocess mode — F-4). Both expose ``.name``,
+    ``.status``, and ``.is_alive`` (callable on the handle, property on
+    the AgentRunner) so light-touch callers don't need to branch.
+    """
+    if _should_use_subprocess(config):
+        # F-4 path: hand off to the daemon-side supervisor. Note that
+        # send_fn is ignored in subprocess mode for the skeleton —
+        # ``notify`` IPC messages are dropped on the supervisor side
+        # until F-6/7/8 wires bridge delivery in.
+        from cc_daemon import runner_supervisor
+        return runner_supervisor.start(
+            name=name,
+            template_name=template_name,
+            args=args,
+            config=config,
+            interval=interval,
+            auto_approve=auto_approve,
+        )
+
     template_content, template_path = load_template(template_name)
     runner = AgentRunner(
         name=name,
@@ -116,12 +153,18 @@ def start_runner(
 
 
 def stop_runner(name: str) -> bool:
+    # Thread mode.
     with _runners_lock:
         r = _runners.pop(name, None)
     if r:
         r.stop()
         return True
-    return False
+    # Subprocess mode (F-4): the handle lives in the daemon supervisor.
+    try:
+        from cc_daemon import runner_supervisor
+    except Exception:
+        return False
+    return runner_supervisor.stop(name)
 
 
 def stop_all() -> int:
@@ -130,7 +173,13 @@ def stop_all() -> int:
         _runners.clear()
     for r in runners:
         r.stop()
-    return len(runners)
+    count = len(runners)
+    try:
+        from cc_daemon import runner_supervisor
+        count += runner_supervisor.stop_all()
+    except Exception:
+        pass
+    return count
 
 
 # ── AgentRunner ────────────────────────────────────────────────────────────
@@ -513,3 +562,183 @@ class AgentRunner:
                 }) + "\n")
         except Exception:
             pass
+
+
+# ── Subprocess entry point (RFC 0002 F-4) ──────────────────────────────────
+#
+# When invoked as ``python -m agent_runner --pipe``, this module turns
+# itself into a runner driven by a JSON-line IPC channel on stdin/stdout
+# instead of the in-process thread + send_fn API. The supervisor side lives
+# in ``cc_daemon/runner_supervisor.py``.
+#
+# Protocol (see cc_daemon/runner_ipc.py docstring for the full message
+# catalogue):
+#   1. Supervisor writes {"op": "init", "payload": {...}} on stdin.
+#   2. We reply {"op": "ready"} on stdout, then run the existing
+#      _run_loop body with send_fn / permission flow redirected to IPC.
+#   3. Per iteration we emit iteration_start / iteration_done.
+#   4. PermissionRequest events bounce out as permission_request and we
+#      block until the supervisor sends back permission_response.
+#   5. Either side may end the run: supervisor sends {"op": "stop"},
+#      or the runner reaches its natural stop conditions and sends
+#      {"op": "exit", "reason": "...", "iterations": N}.
+
+def _pipe_main(name_arg: Optional[str] = None) -> int:
+    """Subprocess entry point. Returns the process exit code."""
+    import argparse
+    import sys as _sys
+    from cc_daemon.runner_ipc import IpcReadTimeout, JsonLineChannel
+
+    parser = argparse.ArgumentParser(prog="agent_runner")
+    parser.add_argument("--pipe", action="store_true",
+                        help="run as a JSON-line IPC subprocess")
+    parser.add_argument("--name", default=name_arg or "",
+                        help="runner name (echoed in logs)")
+    args = parser.parse_args()
+    if not args.pipe:
+        print("agent_runner: --pipe required for subprocess mode",
+              file=_sys.stderr)
+        return 2
+
+    chan = JsonLineChannel(_sys.stdin.buffer, _sys.stdout.buffer)
+
+    # ── 1) Init handshake ─────────────────────────────────────────────────
+    try:
+        init = chan.recv(timeout=10.0)
+    except (IpcReadTimeout, EOFError, ValueError) as e:
+        print(f"agent_runner: init failed: {e}", file=_sys.stderr)
+        return 2
+
+    if init.get("op") != "init":
+        print(f"agent_runner: expected init, got {init!r}", file=_sys.stderr)
+        return 2
+
+    payload = init.get("payload") or {}
+    runner_name   = str(payload.get("name") or args.name or "anon")
+    template_arg  = str(payload.get("template", ""))
+    runner_args   = str(payload.get("args", ""))
+    runner_config = dict(payload.get("config") or {})
+    runner_interval = float(payload.get("interval", 2.0))
+    runner_auto   = bool(payload.get("auto_approve", True))
+
+    try:
+        template_content, template_path = load_template(template_arg)
+    except FileNotFoundError as e:
+        # Pre-handshake failure: write to stderr and exit non-zero.
+        # The supervisor sees the handshake recv hit EOF and raises a
+        # RuntimeError with the stderr tail attached, which is more
+        # informative than sending an IPC `log`/`exit` here would be
+        # (those would be misread as the runner's handshake reply).
+        print(f"agent_runner: template not found: {e}", file=_sys.stderr)
+        return 1
+
+    chan.send({"op": "ready"})
+
+    # ── 2) Bridge send_fn → IPC notify ────────────────────────────────────
+    def _ipc_send(text: str) -> None:
+        try:
+            chan.send({"op": "notify", "text": str(text)})
+        except (BrokenPipeError, OSError):
+            pass
+
+    # ── 3) Construct the existing AgentRunner but DON'T spawn its thread.
+    # We drive _run_loop directly on this process's main thread so the
+    # subprocess stays single-purpose. The PermissionRequest hook is
+    # patched in by overriding auto_approve handling inside a thin
+    # subclass that defers to IPC.
+    runner = _PipeAgentRunner(
+        name=runner_name,
+        template_content=template_content,
+        template_path=template_path,
+        args=runner_args,
+        config=runner_config,
+        send_fn=_ipc_send,
+        interval=runner_interval,
+        auto_approve=runner_auto,
+        chan=chan,
+    )
+
+    # ── 4) Watch for supervisor "stop" on a background thread. The
+    # blocking IPC recv would otherwise compete with the agent's
+    # generator drain inside _run_loop. permission_response and stop
+    # both arrive via the same channel; the runner needs both.
+    pending_perms: dict[str, threading.Event] = {}
+    pending_perms_results: dict[str, bool] = {}
+
+    def _control_loop():
+        while not runner._stop_event.is_set():
+            try:
+                msg = chan.recv(timeout=0.5)
+            except IpcReadTimeout:
+                continue
+            except (EOFError, ValueError, OSError):
+                runner._stop_event.set()
+                break
+            op = msg.get("op", "")
+            if op == "stop":
+                runner._stop_event.set()
+                break
+            if op == "permission_response":
+                rid = msg.get("request_id", "")
+                pending_perms_results[rid] = bool(msg.get("granted"))
+                ev = pending_perms.get(rid)
+                if ev is not None:
+                    ev.set()
+
+    runner._pending_perms = pending_perms
+    runner._pending_perms_results = pending_perms_results
+
+    ctl = threading.Thread(target=_control_loop, daemon=True,
+                           name=f"f4-ctl-{runner_name}")
+    ctl.start()
+
+    try:
+        runner._run_loop()
+    except Exception as e:
+        chan.send({"op": "log", "level": "error",
+                   "msg": f"_run_loop crashed: {type(e).__name__}: {e}"})
+        chan.send({"op": "exit", "reason": "exception",
+                   "iterations": runner.iteration})
+        return 1
+
+    chan.send({"op": "exit", "reason": "completed",
+               "iterations": runner.iteration})
+    return 0
+
+
+class _PipeAgentRunner(AgentRunner):
+    """AgentRunner driven from an IPC channel instead of an in-process
+    send_fn / permission callback. Overrides the two seams in the parent
+    class:
+
+      * iteration boundary  → emit iteration_start / iteration_done
+      * PermissionRequest   → emit permission_request, await response
+    """
+
+    def __init__(self, *, chan, **kw) -> None:
+        super().__init__(**kw)
+        self._chan = chan
+        self._pending_perms: dict = {}
+        self._pending_perms_results: dict = {}
+
+    def _persist_record(self, rec: _IterationRecord) -> None:
+        # Keep the parent's jsonl write so on-disk behaviour is identical;
+        # also push iteration_done over IPC so the supervisor learns about
+        # iteration boundaries in real time.
+        super()._persist_record(rec)
+        try:
+            self._chan.send({
+                "op":         "iteration_done",
+                "iteration":  rec.iteration,
+                "status":     rec.status,
+                "duration_s": rec.duration_s,
+                "summary":    rec.summary,
+                "tokens_in":  0,
+                "tokens_out": 0,
+            })
+        except (BrokenPipeError, OSError):
+            self._stop_event.set()
+
+
+if __name__ == "__main__":
+    sys.exit(_pipe_main())

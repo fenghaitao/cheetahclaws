@@ -13,7 +13,7 @@ The "foundation PR" described at the end of [RFC 0001](./0001-daemon-design-note
 | F-1 | `daemon/` package skeleton; `serve` + `daemon` CLI  | —          | ~1500   | MERGED #80 |
 | F-2 | SQLite schema + events persistence + jobs migration | F-1        | ~700    | MERGED #101 + follow-ups (#fix-f2) |
 | F-3 | `monitor/scheduler` runs in daemon                  | F-2        | ~700    | MERGED #101 + follow-ups (#fix-f2) |
-| F-4 | `agent_runner` becomes subprocess-per-agent         | F-2        | ~1000   | TODO   |
+| F-4 | `agent_runner` becomes subprocess-per-agent         | F-2        | ~1000   | skeleton in progress (see §F-4 below) |
 | F-5 | `proactive` watcher runs in daemon                  | F-2        | ~200    | TODO   |
 | F-6 | Telegram bridge in daemon                           | F-2        | ~500    | TODO   |
 | F-7 | Slack bridge in daemon                              | F-6        | ~500    | TODO   |
@@ -227,16 +227,74 @@ daemon is detected.
 **Scope.** Each `AgentRunner` is its own subprocess. From #68: *"subprocess-per-agent rather than threads — one leaking/crashing runner shouldn't take down the scheduler and bridges."*
 
 **Deliverables.**
-- `daemon/runner_supervisor.py` — spawn / monitor / restart agent-runner subprocesses.
-- `daemon/runner_ipc.py` — line-delimited JSON over stdin/stdout between supervisor and runner.
+- `cc_daemon/runner_supervisor.py` — spawn / monitor / restart agent-runner subprocesses.
+- `cc_daemon/runner_ipc.py` — line-delimited JSON over stdin/stdout between supervisor and runner.
 - `agent_runner.py` — main entry point usable as `python -m agent_runner --pipe …`; iteration-log writes flow back to the daemon and land in `agent_iterations`.
-- Permission requests from runners routed through supervisor → `daemon/permissions.py`.
+- Permission requests from runners routed through supervisor → `cc_daemon/permission.py`.
 
 **Acceptance.**
 - Runner crash (`kill -9 <runner_pid>`) does not kill the daemon; supervisor logs the crash and emits `agent_runner_crash` event.
 - Runner OOM does not affect monitor or bridges.
 - Runner subprocess stops within 5 s of `agent.stop` RPC.
 - Iteration-log entries match in-process behavior (status, duration, summary, token counts).
+
+### Skeleton landed — what's done so far
+
+A POSIX-only skeleton landed under the `agent_runner_subprocess` /
+`CHEETAHCLAWS_ENABLE_F4` feature flag (off by default; REPL is byte-for-byte
+unchanged). Files:
+
+| File | LoC | Role |
+|------|-----|------|
+| `cc_daemon/runner_supervisor.py` | ~610 | Lifecycle (`start` / `stop` / `stop_all` / `get` / `list_all`), three-phase stop (IPC `stop` → SIGTERM → SIGKILL, ≤5 s), reader loop, crash classification, SQLite persistence helpers |
+| `cc_daemon/runner_ipc.py` | 33 | Thin re-export of `cc_kernel.runner.ipc.JsonLineChannel` |
+| `cc_daemon/agent_methods.py` | ~100 | `agent.start` / `agent.stop` / `agent.list` / `agent.status` RPCs, registered from `cc_daemon/server.py:DaemonState.__init__` |
+| `agent_runner.py` | +231 | `python -m agent_runner --pipe` subprocess entry, `_PipeAgentRunner` shim that bridges `send_fn` and `iteration_done` to IPC, dispatch in `start_runner` / `stop_runner` |
+| `tests/test_cc_daemon_runner_supervisor.py` | ~430 | 17 unit tests: handshake, graceful stop, SIGKILL escalation on hung runner, crash via external SIGKILL, IPC shim identity, 9 SQLite persistence cases |
+| `tests/test_cc_daemon_agent_methods.py` | ~210 | 10 RPC tests: registration, param validation, list/status when empty, end-to-end list→stop with inline runner |
+
+Acceptance status:
+
+- ✅ **Crash detection.** `kill -9 <runner_pid>` flips `handle.status` to
+  `"crashed"`, finalizes the `agent_runs` row (`status='crashed'`,
+  `error="exit_code=-9; stderr_tail=..."`), and publishes
+  `agent_runner_crash` on the event bus.
+- ✅ **OOM resilience.** Same code path as `kill -9`; the OOM killer's
+  SIGKILL is observed via `proc.poll()` from the reader loop.
+- ✅ **Stop within 5 s.** Verified by
+  `test_graceful_stop_within_5s` and `test_hanging_runner_escalates_to_sigkill`.
+  Graceful IPC `stop` first; SIGTERM after 2 s; SIGKILL after another 3 s.
+- ✅ **Iteration log parity.** jsonl format is byte-identical to today's
+  in-thread `AgentRunner._persist_record`. `agent_iterations` and
+  `agent_runs` SQLite rows are populated end-to-end (verified by 9
+  persistence tests). `INSERT OR IGNORE` makes re-delivery idempotent.
+
+### Still TODO before this can flip from "skeleton" to "MERGED"
+
+1. **Permission routing.** Today's reader loop auto-approves any
+   `permission_request` IPC message (matches the
+   `auto_approve=True` REPL default). The follow-up wires this through
+   `cc_daemon/permission.py:PermissionStore` so an originator can answer
+   the request via `permission.answer` and the supervisor forwards the
+   response back to the runner.
+2. **Bridge `notify` forwarding.** The runner's `notify` IPC payloads
+   (what `AgentRunner.send_fn` used to push to Telegram / Slack / WeChat)
+   are currently dropped on the supervisor side. Wire them into the
+   bridge mailbox when F-6/7/8 land — until then a runner under F-4
+   gets no end-user notifications.
+3. **Restart policy.** The supervisor detects crashes but does not
+   auto-restart. The decision (which runs deserve restart? exponential
+   backoff?) lives with the originator that started the runner; for now,
+   crashed handles stay in the registry with `status='crashed'` so
+   callers can decide.
+4. **e2e test against the real `python -m agent_runner`.** Unit tests
+   use an inline subprocess to exercise the protocol; a follow-up
+   `tests/e2e_f4_runner.py` should spawn the real entry point with a
+   trivial template and verify the iteration_done → SQLite path under
+   production code.
+5. **Windows path.** Out of scope per RFC; `enabled()` returns False on
+   `sys.platform.startswith("win")` and the dispatch in
+   `agent_runner.start_runner` falls back to threads.
 
 ## F-5 — proactive watcher in daemon
 

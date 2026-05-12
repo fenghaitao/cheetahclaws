@@ -78,6 +78,11 @@ DEFAULTS = {
     # multi-day work where consecutive iterations may produce similar status
     # updates.
     "auto_agent_dup_summary_limit":         3,
+    # RFC 0002 F-4: run agent_runner as a subprocess under cc_daemon
+    # supervision instead of an in-process thread. Off by default so
+    # REPL behaviour is unchanged; daemon code paths can opt in
+    # explicitly. The CHEETAHCLAWS_ENABLE_F4 env var also enables it.
+    "agent_runner_subprocess":              False,
     # Per-provider API keys (optional; env vars take priority)
     # "anthropic_api_key": "sk-ant-..."
     # "openai_api_key":    "sk-..."
