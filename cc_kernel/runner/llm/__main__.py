@@ -17,6 +17,8 @@ Provider selection via env var ``CC_LLM_PROVIDER``:
   mock      — MockProvider.from_env()    (CC_LLM_MOCK_RESPONSE_JSON)
   scripted  — ScriptedMockProvider.from_env()  (CC_LLM_SCRIPTED_RESPONSES_JSON)
   anthropic — AnthropicProvider()        (ANTHROPIC_API_KEY)
+  litellm   — LiteLLMProvider()          (provider-specific env vars,
+                                          or CC_LLM_API_KEY override)
 """
 from __future__ import annotations
 
@@ -45,7 +47,7 @@ def _select_provider() -> Provider:
     if not name:
         raise ProviderUnavailable(
             "CC_LLM_PROVIDER env var not set "
-            "(use 'mock', 'scripted', or 'anthropic')",
+            "(use 'mock', 'scripted', 'anthropic', or 'litellm')",
         )
     if name == "mock":
         return MockProvider.from_env()
@@ -54,6 +56,12 @@ def _select_provider() -> Provider:
     if name == "anthropic":
         from .anthropic_provider import AnthropicProvider
         return AnthropicProvider()
+    if name == "litellm":
+        from .litellm_provider import LiteLLMProvider
+        # litellm reads provider-specific keys (OPENAI_API_KEY,
+        # ANTHROPIC_API_KEY, AZURE_API_KEY, ...) from env on its own.
+        # CC_LLM_API_KEY is an optional explicit override.
+        return LiteLLMProvider(api_key=os.environ.get("CC_LLM_API_KEY"))
     raise ProviderUnavailable(f"unknown CC_LLM_PROVIDER: {name!r}")
 
 

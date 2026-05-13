@@ -16,6 +16,9 @@ prompt_toolkit>=3.0.43
 # Vision input: pip install cheetahclaws[vision]
 #   Pillow
 
+# Multi-provider LLM routing: pip install cheetahclaws[litellm]
+#   litellm>=1.60.0,<2.0.0
+
 # ── Voice STT backends (choose one) ─────────────────────────────────────
 #   pip install faster-whisper     # local Whisper, fastest  (recommended)
 #   pip install openai-whisper     # local Whisper, original

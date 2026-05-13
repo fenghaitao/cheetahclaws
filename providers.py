@@ -141,6 +141,30 @@ PROVIDERS: dict[str, dict] = {
         "context_limit": 128000,
         "models": [],
     },
+    # LiteLLM — universal adapter routing to 100+ providers (OpenAI,
+    # Anthropic, Azure, Bedrock, Vertex AI, Ollama, …) via one SDK. The
+    # real value-add over the existing custom/ + provider-specific entries
+    # is auth handling that's painful to do by hand:
+    #   • Bedrock SigV4 signing (boto3 chain, region resolution)
+    #   • Azure deployment routing (api_version + deployment_id mapping)
+    #   • Vertex AI service-account JWT minting
+    # For OpenAI-shaped endpoints you can already reach via the "custom"
+    # entry, prefer custom/ — it adds no dependency. Use litellm/<provider>/<model>
+    # when the upstream needs the auth gymnastics above.
+    # Install: pip install cheetahclaws[litellm]
+    "litellm": {
+        "type":          "litellm",
+        # litellm reads provider-specific keys (ANTHROPIC_API_KEY,
+        # OPENAI_API_KEY, AZURE_API_KEY, AWS_*, …) from env itself, so
+        # there is no single env-var fallback. CC_LLM_API_KEY is an
+        # explicit override used when callers want to pin one key
+        # without leaking it into the provider's canonical env var.
+        "api_key_env":   "CC_LLM_API_KEY",
+        # Conservative default; the actual cap comes from the real
+        # underlying model. dynamic_cap_max_tokens never exceeds this.
+        "context_limit": 128000,
+        "models":        [],   # dynamic — see docs/guides/litellm.md
+    },
     # NVIDIA NIM (build.nvidia.com) — free tier, no payment info required.
     # OpenAI-compatible. Get a key at https://build.nvidia.com (free signup).
     # Model IDs use the upstream <vendor>/<name> form, so callers must use
@@ -1345,6 +1369,116 @@ def stream_ollama(
     yield AssistantTurn(text, tool_calls, 0, 0, 0, 0)
 
 
+def stream_litellm(
+    api_key: str,
+    model: str,
+    system: str,
+    messages: list,
+    tool_schemas: list,
+    config: dict,
+) -> Generator:
+    """Stream via litellm.completion(stream=True). Yields TextChunk, then
+    AssistantTurn.
+
+    Compared to stream_openai_compat this adapter is intentionally lean:
+    litellm handles per-provider quirks (Bedrock SigV4, Azure deployment
+    routing, Vertex auth, reasoning_content normalisation) internally, so
+    we don't replicate any of the OpenAI-compat-only special cases here.
+    Pass ``drop_params=True`` so unsupported kwargs (e.g. temperature on
+    a model that ignores it) are silently dropped rather than 400'd."""
+    try:
+        import litellm  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "litellm SDK not installed; "
+            "pip install cheetahclaws[litellm]"
+        ) from e
+
+    oai_messages = [{"role": "system", "content": system}] + messages_to_openai(messages)
+
+    kwargs: dict = {
+        "model":          model,
+        "messages":       oai_messages,
+        "stream":         True,
+        "drop_params":    True,
+        # Ask for usage on the terminal chunk; without this every
+        # streamed call would silently record tokens=0/0 and bypass
+        # ledger accounting.
+        "stream_options": {"include_usage": True},
+    }
+    if api_key:
+        kwargs["api_key"] = api_key
+    if tool_schemas and not config.get("no_tools"):
+        kwargs["tools"] = tools_to_openai(tool_schemas)
+        if not config.get("disable_tool_choice"):
+            kwargs["tool_choice"] = "auto"
+
+    _effective_mt = resolve_max_tokens(config, "litellm", model)
+    if _effective_mt:
+        prov_cap = PROVIDERS["litellm"].get("max_completion_tokens")
+        val = min(_effective_mt, prov_cap) if prov_cap else _effective_mt
+        _ctx_window = get_model_context_window("litellm", model)
+        val = dynamic_cap_max_tokens(messages, system, kwargs.get("tools"), _ctx_window, val)
+        kwargs["max_tokens"] = val
+
+    text         = ""
+    tool_buf: dict = {}
+    in_tok = out_tok = 0
+
+    stream = litellm.completion(**kwargs)
+    for chunk in stream:
+        if not chunk.choices:
+            # Final usage-only chunk.
+            if hasattr(chunk, "usage") and chunk.usage:
+                in_tok  = chunk.usage.prompt_tokens or in_tok
+                out_tok = chunk.usage.completion_tokens or out_tok
+            continue
+
+        delta = chunk.choices[0].delta
+        if getattr(delta, "content", None):
+            text += delta.content
+            yield TextChunk(delta.content)
+
+        if getattr(delta, "tool_calls", None):
+            for tc in delta.tool_calls:
+                idx = getattr(tc, "index", 0)
+                slot = tool_buf.setdefault(idx, {"id": "", "name": "", "args": ""})
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn:
+                    if getattr(fn, "name", None):
+                        slot["name"] += fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["args"] += fn.arguments
+
+        if hasattr(chunk, "usage") and chunk.usage:
+            in_tok  = chunk.usage.prompt_tokens or in_tok
+            out_tok = chunk.usage.completion_tokens or out_tok
+
+    tool_calls = []
+    for idx in sorted(tool_buf):
+        v = tool_buf[idx]
+        if not v["name"]:
+            # Streaming sometimes opens a tool_call slot then never emits
+            # a function.name (provider hiccup, parser eats the opener);
+            # we'd otherwise hand the agent a nameless call.
+            continue
+        try:
+            inp = json.loads(v["args"]) if v["args"] else {}
+        except json.JSONDecodeError:
+            inp = {"_raw": v["args"]}
+        if not isinstance(inp, dict):
+            # JSON-valid but not an object (e.g. "null", "[1,2]");
+            # the downstream tool dispatcher expects a dict.
+            inp = {"_raw": v["args"]}
+        tool_calls.append(
+            {"id": v["id"] or f"call_{idx}", "name": v["name"], "input": inp}
+        )
+
+    yield AssistantTurn(text, tool_calls, in_tok, out_tok)
+
+
 def stream(
     model: str,
     system: str,
@@ -1384,6 +1518,11 @@ def stream(
     # ── Build inner generator ──────────────────────────────────────────────
     if prov["type"] == "anthropic":
         inner = stream_anthropic(api_key, model_name, system, messages, tool_schemas, config)
+    elif prov["type"] == "litellm":
+        # `bare_model("litellm/openai/gpt-4o")` strips the leading
+        # "litellm/" prefix only, leaving "openai/gpt-4o" — which is
+        # exactly the form litellm.completion expects.
+        inner = stream_litellm(api_key, model_name, system, messages, tool_schemas, config)
     elif prov["type"] == "ollama":
         import os as _os
         base_url = (

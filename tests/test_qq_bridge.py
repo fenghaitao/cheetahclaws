@@ -1,7 +1,27 @@
 """Tests for bridges/qq.py — message parsing, config, turn detection."""
+import sys
 import threading
 import time
+import types
 import pytest
+
+
+class _FakeRoute:
+    def __init__(self, method, path, **kwargs):
+        self.method = method
+        self.path = path
+        self.kwargs = kwargs
+
+
+@pytest.fixture
+def fake_botpy_route(monkeypatch):
+    """Provide the botpy Route class needed by payload-only send tests."""
+    fake_botpy = types.ModuleType("botpy")
+    fake_http = types.ModuleType("botpy.http")
+    fake_http.Route = _FakeRoute
+    fake_botpy.http = fake_http
+    monkeypatch.setitem(sys.modules, "botpy", fake_botpy)
+    monkeypatch.setitem(sys.modules, "botpy.http", fake_http)
 
 
 def test_config_defaults(monkeypatch, tmp_path):
@@ -235,7 +255,7 @@ def test_qq_stop_event_cleared():
     assert not _qq_stop.is_set()
 
 
-def test_post_group_clean_payload_no_msg_id():
+def test_post_group_clean_payload_no_msg_id(fake_botpy_route):
     """_qq_post_group builds clean payload without msg_id/event_id when empty."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
@@ -266,7 +286,7 @@ def test_post_group_clean_payload_no_msg_id():
     assert "media" not in payload
 
 
-def test_post_group_clean_payload_with_msg_id():
+def test_post_group_clean_payload_with_msg_id(fake_botpy_route):
     """_qq_post_group includes msg_id/msg_seq when msg_id is provided."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
@@ -288,7 +308,7 @@ def test_post_group_clean_payload_with_msg_id():
     assert payload["content"] == "reply text"
 
 
-def test_post_group_clean_payload_with_event_id():
+def test_post_group_clean_payload_with_event_id(fake_botpy_route):
     """_qq_post_group uses event_id when msg_id is None."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
@@ -311,7 +331,7 @@ def test_post_group_clean_payload_with_event_id():
     assert payload["content"] == "reply text"
 
 
-def test_post_c2c_clean_payload():
+def test_post_c2c_clean_payload(fake_botpy_route):
     """_qq_post_c2c builds clean payload."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock

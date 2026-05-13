@@ -42,7 +42,8 @@ Other install methods: [pip install](#alternative-install-with-pip) | [uv instal
 ## 🔥🔥🔥 News (Pacific Time)
 
  
-- May 11, 2026 (latest): **Daemon F-4 skeleton — `agent_runner` runs as a subprocess under `cc_daemon` supervision (off by default).** Each `/agent` runner can now be a `python -m agent_runner --pipe` child process instead of an in-process thread, so a leak / hang / OOM in one runner no longer takes down the scheduler or bridges. New: `cc_daemon/runner_supervisor.py` (lifecycle + 3-phase stop ≤ 5 s + crash detection), `cc_daemon/runner_ipc.py` (re-exports the kernel `JsonLineChannel`), `cc_daemon/agent_methods.py` (`agent.start` / `agent.stop` / `agent.list` / `agent.status` RPCs), `agent_runner.py` gains the `--pipe` entry point. Iteration + run rows land in `agent_runs` / `agent_iterations` (the F-2 tables previously left empty). POSIX-only; toggle with `CHEETAHCLAWS_ENABLE_F4=1` or `agent_runner_subprocess=true`. +27 tests, 104/104 passing. Details: [RFC 0002](docs/RFC/0002-daemon-foundation-roadmap.md) + [docs/news.md](docs/news.md).
+- May 12, 2026 (latest): **`litellm/` provider follow-up to PR #119 — make litellm a real optional dep, fix ledger / streaming, wire it into the CLI / Web UI path.** PR #119 shipped the adapter class but left it unreachable: `litellm` had landed in core deps (description said optional), no entry in top-level `providers.PROVIDERS` (so `--model litellm/...` didn't resolve through the CLI / Web UI), `cost_micro` hard-coded to 0, streaming dropped token counts + tool_calls. Follow-up branch (`fix/litellm-provider-followup`) moves the dep to `pip install ".[litellm]"`, lazy-imports the SDK, adds the registry entry + `stream_litellm` generator, computes cost via `litellm.completion_cost` with a `cost_unknown=True` metadata flag on miss, reassembles streamed chunks via `stream_chunk_builder` (`stream_options={"include_usage": True}`), maps `litellm.exceptions.*` to `ProviderInvalidRequest` vs `ProviderUnavailable` correctly, and adds defensive tool_call parsing. Now usable for AWS Bedrock (SigV4), Azure (deployment routing), and Vertex AI (service-account JWT). +17 unit tests, +3 e2e (skipif-gated on `CC_LITELLM_E2E=1`). Full suite: **2222 passing, zero regressions**. Details: [docs/news.md](docs/news.md).
+- May 11, 2026: **Daemon F-4 skeleton — `agent_runner` runs as a subprocess under `cc_daemon` supervision (off by default).** Each `/agent` runner can now be a `python -m agent_runner --pipe` child process instead of an in-process thread, so a leak / hang / OOM in one runner no longer takes down the scheduler or bridges. New: `cc_daemon/runner_supervisor.py` (lifecycle + 3-phase stop ≤ 5 s + crash detection), `cc_daemon/runner_ipc.py` (re-exports the kernel `JsonLineChannel`), `cc_daemon/agent_methods.py` (`agent.start` / `agent.stop` / `agent.list` / `agent.status` RPCs), `agent_runner.py` gains the `--pipe` entry point. Iteration + run rows land in `agent_runs` / `agent_iterations` (the F-2 tables previously left empty). POSIX-only; toggle with `CHEETAHCLAWS_ENABLE_F4=1` or `agent_runner_subprocess=true`. +27 tests, 104/104 passing. Details: [RFC 0002](docs/RFC/0002-daemon-foundation-roadmap.md) + [docs/news.md](docs/news.md).
 - May 10, 2026 (**v3.05.79**): **Web Chat UI session organization (folders, drag-drop, ChatGPT-style active-folder context, batch select + export, resizable sidebar) + headless-bridges slash handler (#84 follow-up: Telegram/Slack/WeChat /help/monitor/model/status now respond in Docker/--web) + stale-session reaper crash fix + #111 slash duplicate fix + --web --model persistence. Details: [docs/news.md](docs/news.md).**
 - May 10, 2026: **Web Chat UI fixes — slash commands no longer reply twice; `--web --model X` actually applies the model (#111).** Details: [docs/news.md](docs/news.md).
 - May 10, 2026: **Small-context local models survive large workloads — 4-part fix: ctx cap, auto-fanout, stagnation-stop, output paths under `~/.cheetahclaws/`.** Details: [docs/news.md](docs/news.md).
@@ -470,6 +471,11 @@ Claude Code is a powerful, production-grade AI coding assistant — but its sour
 | **MiniMax** | `MiniMax-VL-01` | 1M | Vision + language | `MINIMAX_API_KEY` |
 | **MiniMax** | `abab6.5s-chat` | 256k | Fast, cost-efficient | `MINIMAX_API_KEY` |
 | **MiniMax** | `abab6.5-chat` | 256k | Balanced quality | `MINIMAX_API_KEY` |
+| **AWS Bedrock** _(via litellm)_ | `litellm/bedrock/<model-id>` | varies | SigV4-signed access to Claude, Llama, Mistral on Bedrock | boto3 chain (`AWS_*`) |
+| **Azure OpenAI** _(via litellm)_ | `litellm/azure/<deployment-id>` | varies | Deployment-id routing + `api_version` pinning | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION` |
+| **Google Vertex AI** _(via litellm)_ | `litellm/vertex_ai/<model>` | varies | Service-account JWT auth | `GOOGLE_APPLICATION_CREDENTIALS`, `VERTEXAI_PROJECT`, `VERTEXAI_LOCATION` |
+
+> **`litellm/` adapter:** routes to 100+ providers behind a single SDK; primarily useful when the upstream needs auth gymnastics (Bedrock SigV4, Azure deployment routing, Vertex service-account JWTs). For plain OpenAI-shaped endpoints, prefer the zero-dependency `custom/` adapter. Install with `pip install ".[litellm]"`. See [`docs/guides/recipes.md`](docs/guides/recipes.md#alternative-cloud-providers-with-non-trivial-auth-via-the-litellm-provider).
 
 ### Open-Source (Local via Ollama)
 
@@ -566,6 +572,7 @@ pip install ".[browser]"            # headless browser for JS-rendered pages (pl
 pip install ".[files]"              # PDF + Excel reading (pymupdf, openpyxl)
 pip install ".[ocr]"                # image OCR (pytesseract, Pillow)
 pip install ".[trading]"            # trading agent (yfinance, rank-bm25)
+pip install ".[litellm]"            # AWS Bedrock / Azure / Vertex auth via litellm
 pip install ".[all]"                # everything above
 ```
 
@@ -707,6 +714,42 @@ cheetahclaws --model minimax/MiniMax-Text-01
 cheetahclaws --model minimax/MiniMax-VL-01
 cheetahclaws --model minimax/abab6.5s-chat
 ```
+
+### LiteLLM (AWS Bedrock / Azure / Vertex AI)
+
+Use the `litellm/` prefix when the upstream needs auth that's painful to
+wire by hand — **AWS Bedrock SigV4 signing**, **Azure OpenAI deployment
+routing**, or **Google Vertex AI service-account JWTs**. For plain
+OpenAI-shaped endpoints (vLLM, LM Studio, TGI, Together, Groq, …) prefer
+the zero-dependency `custom/` adapter from Option C below.
+
+```bash
+pip install ".[litellm]"
+
+# AWS Bedrock — uses your boto3 credential chain (AWS_PROFILE, ~/.aws/
+# credentials, IAM role on EC2). No explicit api_key needed.
+export AWS_REGION=us-east-1
+cheetahclaws --model litellm/bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+
+# Azure OpenAI — deployment-id routing via api_base + api_version pair.
+export AZURE_API_KEY=...
+export AZURE_API_BASE=https://my-resource.openai.azure.com
+export AZURE_API_VERSION=2024-10-01-preview
+cheetahclaws --model litellm/azure/my-gpt4o-deployment
+
+# Google Vertex AI — Application Default Credentials.
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+export VERTEXAI_PROJECT=my-project
+export VERTEXAI_LOCATION=us-central1
+cheetahclaws --model litellm/vertex_ai/gemini-2.0-flash
+```
+
+The model string format is **`litellm/<provider>/<model>`** — the first
+segment routes to this adapter, everything after is passed verbatim to
+`litellm.completion(model=...)`. See [LiteLLM docs](https://docs.litellm.ai/docs/providers)
+for the full list of 100+ supported providers, and
+[`docs/guides/recipes.md`](docs/guides/recipes.md#alternative-cloud-providers-with-non-trivial-auth-via-the-litellm-provider)
+for the troubleshooting table.
 
 ---
 
