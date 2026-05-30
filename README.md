@@ -1372,10 +1372,19 @@ Whisper supports 99 languages. `auto` detection works well but explicit codes im
 ## Citation
 If you find the repository useful, please cite the study
 ``` Bash
+@article{gu2026model,
+  title={From Model Scaling to System Scaling: Scaling the Harness in Agentic AI},
+  author={Gu, Shangding},
+  journal={arXiv preprint arXiv:2605.26112},
+  year={2026}
+}
+
 @article{cheetahclaws2026,
   title={CheetahClaws: An Extensible, Python-Native Agent System for Autonomous Multi-Model Workflows},
   author={CheetahClaws Team},
   journal={github},
   year={2026}
 }
+
+
 ```
