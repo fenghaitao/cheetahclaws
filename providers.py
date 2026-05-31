@@ -66,11 +66,11 @@ PROVIDERS: dict[str, dict] = {
     "kimi": {
         "type":       "openai",
         "api_key_env": "MOONSHOT_API_KEY",
-        "base_url":   "https://api.moonshot.cn/v1",
-        "context_limit": 128000,
+        "base_url":   "https://api.moonshot.ai/v1",
+        "context_limit": 262144,
         "models": [
+            "kimi-k2.6", "kimi-k2.5",
             "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
-            "kimi-latest",
         ],
     },
     "qwen": {
@@ -204,6 +204,8 @@ COSTS = {
     "gemini-2.0-flash":         (0.075, 0.3),
     "gemini-1.5-pro":           (1.25,  5.0),
     "gemini-2.5-pro-preview-03-25": (1.25, 10.0),
+    "kimi-k2.6":                (6.5,  27.0),
+    "kimi-k2.5":                (4.0,  21.0),
     "moonshot-v1-8k":           (1.0,   3.0),
     "moonshot-v1-32k":          (2.4,   7.0),
     "moonshot-v1-128k":         (8.0,  24.0),
