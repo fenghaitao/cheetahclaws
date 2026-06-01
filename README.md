@@ -480,7 +480,7 @@ If you find the repository useful, please cite the study
 }
 
 @article{cheetahclaws2026,
-  title={CheetahClaws: A Fast and Easy-to-Use Agent Harness Infrastructure for Long-Horizon, Multi-Model, and Tool-Using AI Systems},
+  title={CheetahClaws: Agent Harness Infrastructure for Long-Horizon, Multi-Model, and Tool-Using AI Systems},
   author={CheetahClaws Team},
   journal={github},
   year={2026}
