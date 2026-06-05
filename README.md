@@ -4,7 +4,7 @@ English | [中文](docs/i18n/README.CN.MD) | [한국어](docs/i18n/README.KO.MD)
 
 <div align="center">
   <a href="[https://github.com/SafeRL-Lab/Robust-Gymnasium](https://github.com/SafeRL-Lab/cheetahclaws)">
-    <img src="docs/media/logos/logo-5.png" alt="Logo" width="280"> 
+    <img src="https://raw.githubusercontent.com/SafeRL-Lab/cheetahclaws/main/docs/media/logos/logo-5.png" alt="Logo" width="280"> 
   </a>
 
   
@@ -39,7 +39,7 @@ Other install methods: [pip install](#alternative-install-with-pip) | [uv instal
 
 ## 🔥🔥🔥 News (Pacific Time)
 
-- June 5, 2026 (latest, **v3.05.82**): **User-controllable token/cost budgets** — `/budget $5` / `/budget 200k` / `/budget daily $20` cap spend per session or per day, enforced before each model call; on hit the session auto-saves and you're shown how to `/resume` or raise the cap and continue (warns at ≥80%/95%; `--budget` sets it at startup). Details: [docs/guides/features.md](docs/guides/features.md) · [docs/news.md](docs/news.md).
+- June 5, 2026 (latest, **v3.5.82**): **User-controllable token/cost budgets** — `/budget $5` / `/budget 200k` / `/budget daily $20` cap spend per session or per day, enforced before each model call; on hit the session auto-saves and you're shown how to `/resume` or raise the cap and continue (warns at ≥80%/95%; `--budget` sets it at startup). Details: [docs/guides/features.md](docs/guides/features.md) · [docs/news.md](docs/news.md).
 - June 5, 2026: **Adaptive Markdown streaming — live output stays correct on every device** by auto-selecting a per-device tier (`live` in-place redraw on capable terminals incl. modern SSH emulators, append-only `commit` for SSH/Apple Terminal/pipes/CJK text so frames never duplicate, `plain` fallback); also ships a visual `/context` usage grid and a 1M context window for `deepseek-v4-flash`. Details: [docs/guides/features.md](docs/guides/features.md) · [docs/news.md](docs/news.md).
 - June 4, 2026 (**v3.05.81**): **Claude-Code-style quiet output** hides per-tool execution and shows one summary line per turn (on by default), with a live spinner timer + token estimate and a `✻ Worked for…` footer; `/verbose` overrides, toggle with `/quiet`. Details: [docs/guides/features.md](docs/guides/features.md) · [docs/news.md](docs/news.md).
 - June 4, 2026: **Context-window override** — `/config context_window=<N>` sets the context length that drives the prompt `%`, `/context`, the compaction trigger, and the output cap consistently (distinct from `max_tokens`; read live, no restart). Details: [docs/guides/reference.md](docs/guides/reference.md) · [docs/news.md](docs/news.md).
@@ -76,25 +76,25 @@ CheetahClaws: **A Fast** and **Easy-to-Use** Python native Agent Harness Infrast
 ### Demos
 
 <div align=center>
-<img src="docs/media/demos/demo.gif" width="850"/>
+<img src="https://raw.githubusercontent.com/SafeRL-Lab/cheetahclaws/main/docs/media/demos/demo.gif" width="850"/>
 </div>
 <div align=center><sub><i>Task execution in the terminal</i></sub></div>
 
 <br/>
 
 <div align=center>
-<img src="docs/media/demos/web_demo.gif" width="850"/>
+<img src="https://raw.githubusercontent.com/SafeRL-Lab/cheetahclaws/main/docs/media/demos/web_demo.gif" width="850"/>
 </div>
 <div align=center><sub><i>Web UI: browser chat — sidebar, tool cards, approval prompts, Markdown streaming</i></sub></div>
 
 <br/>
 
 <div align=center>
-<img src="docs/media/demos/trading_demo.gif" width="850"/>
+<img src="https://raw.githubusercontent.com/SafeRL-Lab/cheetahclaws/main/docs/media/demos/trading_demo.gif" width="850"/>
 </div>
 <div align=center><sub><i>Autonomous trading agent</i></sub></div>
 
-> More animated demos (code review, `/research`, `/brainstorm`, `/lab`, Telegram/WeChat/Slack bridges) live in [`docs/media/`](docs/media/).
+> More animated demos (code review, `/research`, `/brainstorm`, `/lab`, Telegram/WeChat/Slack bridges) live in [`docs/media/`](https://github.com/SafeRL-Lab/cheetahclaws/tree/main/docs/media/).
 
 ---
 
