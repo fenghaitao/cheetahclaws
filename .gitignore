@@ -7,3 +7,6 @@ debug_payload.json
 brainstorm_outputs/
 reference/
 botpy.log
+
+# Graphify
+graphify-out/cache/
